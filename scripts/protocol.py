@@ -9,8 +9,9 @@ import os
 import re
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 
@@ -24,6 +25,41 @@ WORKFLOW_DELIVERY_ROOT_ENV = "PI_WORKFLOW_DELIVERY_ROOT"
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 STATE_ROOT = SKILL_ROOT / "wp-state"
 CAPABILITY_ALIASES = {"frontier": "hard"}
+TASK_PROTOCOL_VERSION = 2
+MAX_HANDOFF_BYTES = 512 * 1024
+MAX_ATOMIC_CONTRACT_BYTES = 128 * 1024
+MAX_CONTRACT_ERRORS = 32
+ATOMIC_CONTRACT_FIELDS = (
+    "single_outcome",
+    "deliverables",
+    "write_scope",
+    "read_only",
+    "acceptance",
+    "resume_boundary",
+)
+_PLACEHOLDER_SENTINEL = r"(?:TODO|TBD|TBC|FIXME|UNKNOWN|N\s*/\s*A|NONE|XXX)"
+_HANDOFF_PLACEHOLDER_SENTINEL = r"(?:TODO|TBD|TBC|FIXME|XXX)"
+_TEMPLATE_TOKEN = r"(?:<[^>\r\n]+>|\{\{[^}\r\n]+\}\})"
+
+# A contract value is a placeholder only when the sentinel is the value (or
+# the conventional ``TODO: replace ...`` form).  Words such as TODO or NONE
+# inside an observable sentence remain valid content.
+PLACEHOLDER_PATTERN = re.compile(
+    rf"(?ix)(?:{_TEMPLATE_TOKEN}|^\s*{_PLACEHOLDER_SENTINEL}\s*$|"
+    rf"^\s*{_PLACEHOLDER_SENTINEL}\s*[:=-]\s*\S)"
+)
+
+# Outside the structured contract, match only template sentinels at the start
+# of a bullet/checklist value or immediately after a field colon. NONE and
+# UNKNOWN are valid HANDOFF prose (for example ``Blockers: None``), so they
+# remain contract-value sentinels but are not line-level HANDOFF sentinels.
+HANDOFF_PLACEHOLDER_PATTERN = re.compile(
+    rf"(?im)(?:{_TEMPLATE_TOKEN}|"
+    rf"^\s*(?:[-*]\s+)?(?:\[[ xX]\]\s+)?(?:`?"
+    rf"{_HANDOFF_PLACEHOLDER_SENTINEL}\b`?).*$|"
+    rf"^\s*(?:[-*]\s+)?[^:\r\n]+:\s*(?:`?"
+    rf"{_HANDOFF_PLACEHOLDER_SENTINEL}\b`?).*$)"
+)
 
 
 def _configured_protected_roots() -> list[Path]:
@@ -138,6 +174,7 @@ def task_relative_paths(task_id: str, repo: Path) -> dict[str, Path]:
         "claude_settings": task_dir / "claude-settings.json",
         "codex_goal": task_dir / "CODEX_GOAL.txt",
         "result": task_dir / "result.json",
+        "budget_checkpoints": task_dir / "budget-checkpoints.json",
         "run_root": run_root,
     }
 
@@ -440,6 +477,262 @@ def _nonempty_string(value: Any) -> bool:
 def _safe_relative_path(value: str) -> bool:
     candidate = PurePosixPath(value)
     return not candidate.is_absolute() and ".." not in candidate.parts and value != ""
+
+
+def _safe_write_scope_path(value: str) -> bool:
+    """Accept repository-relative glob paths without platform ambiguity."""
+    if not isinstance(value, str) or not value or "\x00" in value:
+        return False
+    if any(ord(char) < 32 for char in value):
+        return False
+    if "\\" in value or value.startswith("~"):
+        return False
+    if PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute():
+        return False
+    return ".." not in PurePosixPath(value).parts
+
+
+def _has_placeholder(value: str) -> bool:
+    return bool(PLACEHOLDER_PATTERN.search(value.strip()))
+
+
+def _bounded_errors(errors: list[str]) -> list[str]:
+    if len(errors) <= MAX_CONTRACT_ERRORS:
+        return errors
+    return errors[: MAX_CONTRACT_ERRORS - 1] + [
+        f"additional contract errors omitted after {MAX_CONTRACT_ERRORS - 1}"
+    ]
+
+
+def _validate_contract_text(field: str, value: Any, errors: list[str]) -> None:
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"{field} must be a non-empty string")
+    elif _has_placeholder(value):
+        errors.append(f"{field} contains a placeholder")
+
+
+def validate_atomic_work_contract(contract: Any) -> list[str]:
+    """Validate the structured v2 Atomic Work Contract deterministically."""
+    errors: list[str] = []
+    if not isinstance(contract, dict):
+        return ["Atomic Work Contract must be a JSON object"]
+
+    missing = [field for field in ATOMIC_CONTRACT_FIELDS if field not in contract]
+    if missing:
+        errors.append("Atomic Work Contract missing fields: " + ", ".join(missing))
+
+    _validate_contract_text("single_outcome", contract.get("single_outcome"), errors)
+    _validate_contract_text("resume_boundary", contract.get("resume_boundary"), errors)
+
+    for field in ("deliverables", "acceptance"):
+        value = contract.get(field)
+        if not isinstance(value, list) or not value:
+            errors.append(f"{field} must be a non-empty array")
+            continue
+        for index, item in enumerate(value):
+            if not isinstance(item, str) or not item.strip():
+                errors.append(f"{field}[{index}] must be a non-empty string")
+            elif _has_placeholder(item):
+                errors.append(f"{field}[{index}] contains a placeholder")
+
+    read_only = contract.get("read_only")
+    if not isinstance(read_only, bool):
+        errors.append("read_only must be a boolean")
+
+    write_scope = contract.get("write_scope")
+    if not isinstance(write_scope, list):
+        errors.append("write_scope must be an array of repository-relative glob paths")
+        write_scope = []
+    else:
+        for index, item in enumerate(write_scope):
+            if not isinstance(item, str) or not item.strip():
+                errors.append(f"write_scope[{index}] must be a non-empty path")
+                continue
+            if _has_placeholder(item):
+                errors.append(f"write_scope[{index}] contains a placeholder")
+            if not _safe_write_scope_path(item):
+                errors.append(
+                    f"write_scope[{index}] must be a safe repository-relative path"
+                )
+        if len(write_scope) != len(set(write_scope)):
+            errors.append("write_scope must not contain duplicates")
+
+    if isinstance(read_only, bool):
+        if read_only and write_scope:
+            errors.append("read_only true requires an explicit empty write_scope")
+        if not read_only and not write_scope:
+            errors.append("read_only false requires a non-empty write_scope")
+    return _bounded_errors(errors)
+
+
+def _section_after_heading(body: str, heading: str) -> str | None:
+    match = re.search(rf"(?m)^# {re.escape(heading)}\s*$", body)
+    if match is None:
+        return None
+    remainder = body[match.end() :]
+    lines = remainder.splitlines(keepends=True)
+    collected: list[str] = []
+    in_fence = False
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence and re.match(r"^# ", line):
+            break
+        collected.append(line)
+    return "".join(collected)
+
+
+def _validate_v2_handoff_sections(
+    body: str, contract_heading: re.Match[str], contract_fence: re.Match[str]
+) -> list[str]:
+    """Check the non-contract readiness sections of a v2 HANDOFF."""
+    errors: list[str] = []
+    acceptance = _section_after_heading(body, "Acceptance Criteria")
+    if acceptance is None:
+        errors.append("HANDOFF is missing '# Acceptance Criteria'")
+    elif not re.search(r"(?m)^\s*-\s+\[[ xX]\]\s+\S", acceptance):
+        errors.append("Acceptance Criteria must contain a non-empty checklist")
+
+    validation = _section_after_heading(body, "Validation Commands")
+    if validation is None:
+        errors.append("HANDOFF is missing '# Validation Commands'")
+    else:
+        fence = re.search(r"(?ms)^```bash\s*\n(?P<commands>.*?)\n```", validation)
+        if fence is None:
+            errors.append("Validation Commands must contain a fenced bash block")
+        else:
+            commands = [
+                line.strip()
+                for line in fence.group("commands").splitlines()
+                if line.strip() and not line.lstrip().startswith("#")
+            ]
+            if not commands:
+                errors.append("Validation Commands must contain at least one command")
+
+    before_contract = body[: contract_heading.start()]
+    after_contract = body[contract_heading.end() + contract_fence.end() :]
+    if HANDOFF_PLACEHOLDER_PATTERN.search(before_contract + after_contract):
+        errors.append("HANDOFF contains a placeholder outside Atomic Work Contract")
+    return errors
+
+
+@dataclass(frozen=True)
+class TaskPackageValidation:
+    """Parsed task-package contract and its bounded validation result."""
+
+    protocol_version: int | None
+    contract: dict[str, Any] | None
+    errors: tuple[str, ...] = ()
+
+    @property
+    def legacy(self) -> bool:
+        return self.protocol_version is None and not self.errors
+
+    @property
+    def valid(self) -> bool:
+        return not self.errors
+
+
+def _read_bounded_text(path: Path) -> str:
+    size = path.stat().st_size
+    if size > MAX_HANDOFF_BYTES:
+        raise ValueError(
+            f"HANDOFF exceeds the {MAX_HANDOFF_BYTES} byte parsing limit"
+        )
+    return path.read_text(encoding="utf-8")
+
+
+def parse_task_package_text(text: str) -> TaskPackageValidation:
+    """Parse a HANDOFF's v2 contract; unversioned text is explicit legacy."""
+    if len(text.encode("utf-8")) > MAX_HANDOFF_BYTES:
+        return TaskPackageValidation(
+            None, None, (f"HANDOFF exceeds the {MAX_HANDOFF_BYTES} byte parsing limit",)
+        )
+    try:
+        _, frontmatter, body = _frontmatter(text)
+    except ValueError as exc:
+        return TaskPackageValidation(None, None, (str(exc),))
+
+    raw_version = _frontmatter_value(frontmatter, "task_protocol_version")
+    if raw_version is None:
+        return TaskPackageValidation(None, None)
+    if raw_version != str(TASK_PROTOCOL_VERSION):
+        return TaskPackageValidation(
+            None,
+            None,
+            (f"task_protocol_version must be {TASK_PROTOCOL_VERSION}",),
+        )
+
+    heading = re.search(r"(?m)^# Atomic Work Contract\s*$", body)
+    if heading is None:
+        return TaskPackageValidation(
+            TASK_PROTOCOL_VERSION,
+            None,
+            ("missing '# Atomic Work Contract' section",),
+        )
+    section = body[heading.end() :]
+    fence = re.search(r"(?ms)^```json\s*\n(?P<json>.*?)\n```(?:\s|$)", section)
+    if fence is None:
+        return TaskPackageValidation(
+            TASK_PROTOCOL_VERSION,
+            None,
+            ("Atomic Work Contract must contain one fenced JSON block",),
+        )
+    payload = fence.group("json")
+    if len(payload.encode("utf-8")) > MAX_ATOMIC_CONTRACT_BYTES:
+        return TaskPackageValidation(
+            TASK_PROTOCOL_VERSION,
+            None,
+            (
+                "Atomic Work Contract exceeds the "
+                f"{MAX_ATOMIC_CONTRACT_BYTES} byte parsing limit",
+            ),
+        )
+    def reject_json_constant(value: str) -> None:
+        raise ValueError(f"invalid JSON constant {value}")
+
+    try:
+        contract = json.loads(payload, parse_constant=reject_json_constant)
+    except json.JSONDecodeError as exc:
+        return TaskPackageValidation(
+            TASK_PROTOCOL_VERSION,
+            None,
+            (f"Atomic Work Contract JSON is malformed: {exc.msg} at line {exc.lineno} column {exc.colno}",),
+        )
+    except ValueError as exc:
+        return TaskPackageValidation(
+            TASK_PROTOCOL_VERSION,
+            None,
+            (f"Atomic Work Contract JSON is malformed: {exc}",),
+        )
+    errors = validate_atomic_work_contract(contract)
+    if not isinstance(contract, dict):
+        return TaskPackageValidation(TASK_PROTOCOL_VERSION, None, tuple(errors))
+    errors.extend(_validate_v2_handoff_sections(body, heading, fence))
+    return TaskPackageValidation(
+        TASK_PROTOCOL_VERSION, contract, tuple(_bounded_errors(errors))
+    )
+
+
+def validate_task_package(path: Path) -> TaskPackageValidation:
+    """Read and validate a task HANDOFF without changing any task state."""
+    try:
+        text = _read_bounded_text(path)
+    except (OSError, UnicodeError, ValueError) as exc:
+        return TaskPackageValidation(None, None, (f"cannot read HANDOFF: {exc}",))
+    return parse_task_package_text(text)
+
+
+def task_package_error_lines(
+    validation: TaskPackageValidation, *, prefix: str = ""
+) -> list[str]:
+    """Render bounded, actionable diagnostics for a task-package preflight."""
+    label = f"{prefix}: " if prefix else ""
+    if validation.errors:
+        return [label + error for error in validation.errors]
+    if validation.legacy:
+        return [label + "legacy task package (unversioned compatibility path)"]
+    return []
 
 
 def validate_result(

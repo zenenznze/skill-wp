@@ -27,6 +27,9 @@ class ModelResolverTests(unittest.TestCase):
         self.assertEqual(resolve_model("codex", "fast")["model"], "gpt-5.6-luna")
         self.assertEqual(resolve_model("codex", "hard")["model"], "gpt-5.6-sol")
         self.assertEqual(resolve_model("kimi", "frontier")["model"], "kimi-code/k3")
+        self.assertEqual(resolve_model("agy", "fast")["model"], "gemini-3.7-flash-low")
+        self.assertEqual(resolve_model("agy", "balanced")["model"], "gemini-3.7-flash-high")
+        self.assertEqual(resolve_model("agy", "hard")["model"], "gemini-3.7-flash-high")
         resolved = resolve_model(
             "grok", "frontier", override="grok-custom", catalog=["grok-4.6"]
         )
@@ -61,6 +64,9 @@ class ModelResolverTests(unittest.TestCase):
         self.assertEqual(resolve_effort("claude", "balanced"), "high")
         self.assertEqual(resolve_effort("grok", "frontier"), "inherited")
         self.assertEqual(resolve_effort("kimi", "balanced", "custom"), "custom")
+        self.assertEqual(resolve_effort("agy", "fast"), "low")
+        self.assertEqual(resolve_effort("agy", "balanced"), "high")
+        self.assertEqual(resolve_effort("agy", "hard"), "high")
 
 
 if __name__ == "__main__":

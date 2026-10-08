@@ -1,0 +1,22 @@
+{
+  "name": "skill-wp-control-plane",
+  "version": "2.0.0",
+  "private": true,
+  "pi": { "extensions": ["./extensions/wp.ts"] },
+  "type": "module",
+  "bin": { "wpctl": "./bin/wpctl.mjs" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/tests-ts/*.test.js",
+    "e2e:supervisor": "node scripts/e2e_wp_supervisor.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,55 @@
+---
+graph_id: {{GRAPH_ID}}
+status: planned
+orchestrator: {{ORCHESTRATOR}}
+created_at: {{CREATED_AT}}
+updated_at: {{CREATED_AT}}
+---
+
+# Goal
+
+{{GOAL}}
+
+The goal is an observable outcome. Acceptance criteria are authoritative if the
+current implementation direction changes.
+
+# Node Table
+
+| id | kind | task_id / path | status | writes |
+
+TODO: fill one row per node.
+
+# Edges
+
+| from → to | relation | reason |
+
+TODO: fill one row per edge. Every edge needs a non-placeholder reason.
+
+# Critical Path
+
+TODO: longest task chain through effective dependencies.
+
+# Integration And Acceptance
+
+Orchestrator-owned merge/verify checklist. Fill in once node statuses are known.
+
+- [ ] `python3 scripts/verify_graph.py --repo <execution-root> --graph-id {{GRAPH_ID}}`
+- [ ] `python3 scripts/verify_graph.py --repo <execution-root> --graph-id {{GRAPH_ID}} --require-success`
+- [ ] Merge or independently verify every success node's terminal artifacts.
+
+# Execution Progress
+
+- Not started.
+
+# Decision Record
+
+- None.
+
+# Blockers
+
+- None.
+
+# Resume Instructions
+
+Start with the current GRAPH_HANDOFF, inspect the latest evidence, and continue
+the next bounded attempt. Do not reconstruct the graph from chat.

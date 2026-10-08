@@ -1,5 +1,6 @@
 ---
 task_id: {{TASK_ID}}
+task_protocol_version: 2
 status: planned
 orchestrator: {{ORCHESTRATOR}}
 controller_model: {{PLANNER_MODEL}}
@@ -18,6 +19,30 @@ updated_at: {{CREATED_AT}}
 
 The goal is an observable outcome. Acceptance criteria are authoritative if the
 current implementation direction changes.
+
+# Atomic Work Contract
+
+```json
+{
+  "single_outcome": "TODO: replace with one observable outcome",
+  "deliverables": [
+    "TODO: list the owned deliverable"
+  ],
+  "write_scope": [
+    "TODO: declare repository-relative paths or globs"
+  ],
+  "read_only": false,
+  "acceptance": [
+    "TODO: add an independent acceptance check"
+  ],
+  "resume_boundary": "TODO: state the exact restart location"
+}
+```
+
+The contract is structural and executable. Replace every placeholder with the
+smallest complete statement before an executor is selected. `write_scope` is
+the owned repository-relative write set; a read-only task must declare `[]`
+explicitly and graph nodes must declare the same `writes` set.
 
 # Current Repository State
 

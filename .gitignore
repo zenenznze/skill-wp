@@ -5,8 +5,10 @@ work/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+/node_modules/
+/dist/
 
-# wp-owned state lives in the skill checkout, never in target repositories.
+# Legacy checkout-local state remains ignored; new state lives in ~/.agents/state/wp.
 /wp-state/
 
 # Legacy and user-local content are never part of the public release.
@@ -14,11 +16,14 @@ __pycache__/
 /HANDOFF.md
 /wp-custom/
 
-# Local dependencies, builds, credentials and machine artifacts
-node_modules/
-dist/
+# Public-development privacy and migration backups
+/.wp-development-backup/
 *.pem
 *.key
-.DS_Store
 *.log
+*.bundle
+*.bak
+*.bak-*
+.DS_Store
 core.[0-9]*
+.ultra-build/runtime/

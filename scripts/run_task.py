@@ -5,17 +5,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-from model_resolver import CAPABILITIES, resolve_model
+from model_resolver import CAPABILITIES, resolve_effort, resolve_model
 from protocol import (
     assert_isolated_execution_root,
     normalize_capability,
     read_json,
     task_relative_paths,
+    task_package_error_lines,
     update_handoff_frontmatter,
+    validate_task_package,
 )
 
 
@@ -28,6 +31,7 @@ DEFAULT_EXECUTOR_BINARIES = {
     "grok": "grok",
     "kimi": "kimi",
     "pi": "pi",
+    "agy": "agy",
 }
 EXECUTOR_BINARY_ATTRIBUTES = {
     executor: f"{executor}_bin" for executor in DEFAULT_EXECUTOR_BINARIES
@@ -37,8 +41,8 @@ EXECUTOR_BINARY_ATTRIBUTES = {
 VALIDATION_SECTION_MARKER = "# Validation Commands"
 
 
-class ExplicitBinaryAction(argparse.Action):
-    """Store a binary value and remember that the CLI explicitly supplied it."""
+class ExplicitValueAction(argparse.Action):
+    """Store a value and remember that the CLI explicitly supplied it."""
 
     def __call__(
         self,
@@ -138,7 +142,7 @@ def parse_args() -> argparse.Namespace:
         "--agent",
         "--executor",
         dest="executor",
-        choices=("auto", "claude", "codex", "grok", "kimi", "pi"),
+        choices=("auto", "claude", "codex", "grok", "kimi", "pi", "agy"),
         default="auto",
     )
     parser.add_argument("--attempt", type=int, default=1)
@@ -151,6 +155,11 @@ def parse_args() -> argparse.Namespace:
         dest="resume",
         action="store_true",
         help="continue the latest bounded attempt when the selected client supports it",
+    )
+    parser.add_argument(
+        "--allow-legacy-task-package",
+        action="store_true",
+        help="explicitly resume an unversioned legacy task package",
     )
 
     routing = parser.add_argument_group("auto routing evidence")
@@ -181,7 +190,7 @@ def parse_args() -> argparse.Namespace:
     claude.add_argument("--effort", choices=("high", "max"), default="high")
     claude.add_argument("--max-turns", type=int, default=80)
     claude.add_argument(
-        "--claude-bin", default="claude", action=ExplicitBinaryAction
+        "--claude-bin", default="claude", action=ExplicitValueAction
     )
     claude.add_argument("--claude-model", help="override the capability model alias")
     claude.add_argument(
@@ -193,37 +202,47 @@ def parse_args() -> argparse.Namespace:
     claude.add_argument("--max-budget-usd", type=float)
 
     codex = parser.add_argument_group("Codex Goal executor")
-    codex.add_argument("--model", default=DEFAULT_CODEX_MODEL)
+    codex.add_argument(
+        "--model", default=DEFAULT_CODEX_MODEL, action=ExplicitValueAction
+    )
     codex.add_argument(
         "--reasoning-effort",
         "--codex-reasoning-effort",
         dest="reasoning_effort",
         default="xhigh",
     )
-    codex.add_argument("--codex-bin", default="codex", action=ExplicitBinaryAction)
+    codex.add_argument("--codex-bin", default="codex", action=ExplicitValueAction)
     codex.add_argument("--idle-timeout-seconds", type=float, default=900)
     codex.add_argument("--request-timeout-seconds", type=float, default=60)
     codex.add_argument("--token-budget", type=int)
 
     kimi = parser.add_argument_group("Kimi prompt agent")
-    kimi.add_argument("--kimi-bin", default="kimi", action=ExplicitBinaryAction)
+    kimi.add_argument("--kimi-bin", default="kimi", action=ExplicitValueAction)
     kimi.add_argument("--kimi-model", default=DEFAULT_KIMI_MODEL)
 
     pi = parser.add_argument_group("Pi prompt agent")
-    pi.add_argument("--pi-bin", default="pi", action=ExplicitBinaryAction)
+    pi.add_argument("--pi-bin", default="pi", action=ExplicitValueAction)
     pi.add_argument("--pi-model")
 
     grok = parser.add_argument_group("Grok prompt agent")
-    grok.add_argument("--grok-bin", default="grok", action=ExplicitBinaryAction)
+    grok.add_argument("--grok-bin", default="grok", action=ExplicitValueAction)
     grok.add_argument("--grok-model")
     grok.add_argument("--grok-effort")
     grok.add_argument("--grok-max-turns", type=int, default=8)
+
+    agy = parser.add_argument_group("Antigravity (agy) prompt agent")
+    agy.add_argument("--agy-bin", default="agy", action=ExplicitValueAction)
+    agy.add_argument("--agy-model")
+    agy.add_argument("--agy-effort", choices=("low", "medium", "high"))
+
     parser.set_defaults(
         claude_bin_explicit=False,
         codex_bin_explicit=False,
         grok_bin_explicit=False,
         kimi_bin_explicit=False,
         pi_bin_explicit=False,
+        agy_bin_explicit=False,
+        model_explicit=False,
     )
     return parser.parse_args()
 
@@ -233,7 +252,8 @@ def handoff_ready(path: Path) -> bool:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return False
-    if "TODO" in text or "# Acceptance Criteria" not in text:
+    package = validate_task_package(path)
+    if package.legacy or not package.valid:
         return False
     return bool(validation_commands(text))
 
@@ -252,8 +272,7 @@ def validate_sustained_gate(args: argparse.Namespace, handoff: Path) -> None:
         raise ValueError("--sustained-goal requires a positive --timeout-seconds")
     if not handoff_ready(handoff):
         raise ValueError(
-            "--sustained-goal requires a complete HANDOFF without TODO placeholders "
-            "and with Validation Commands"
+            "--sustained-goal requires a complete v2 HANDOFF with Validation Commands"
         )
 
 
@@ -497,6 +516,33 @@ def command_for(
             command.extend(["--execution-mode", "sustained"])
         if args.resume:
             command.append("--resume")
+    elif executor == "agy":
+        if model_resolution is None:
+            model_resolution = executor_model_resolution(args, executor, capability)
+        agy_model = model_resolution.get("model") or getattr(args, "agy_model", None) or "gemini-3.7-flash-high"
+        agy_effort = getattr(args, "agy_effort", None)
+        if agy_effort is None:
+            agy_effort = resolve_effort("agy", capability)
+        command = [
+            sys.executable,
+            str(SCRIPT_ROOT / "run_agy_executor.py"),
+            "--repo",
+            str(args.repo.resolve()),
+            "--task-id",
+            args.task_id,
+            "--agy-bin",
+            executor_binary(args, "agy"),
+            "--model",
+            agy_model,
+            "--timeout-seconds",
+            str(timeout if timeout is not None else 7200),
+            "--attempt",
+            str(args.attempt),
+        ]
+        if agy_effort:
+            command.extend(["--effort", agy_effort])
+        if args.resume:
+            command.append("--resume")
     else:
         raise ValueError(f"unsupported agent route: {executor}")
     if args.revision is not None:
@@ -526,10 +572,22 @@ def executor_model_resolution(
             "source": "override" if override is not None else "inherited",
             "catalog": None,
         }
+    if executor == "agy":
+        override = getattr(args, "agy_model", None)
+        return resolve_model(executor, capability, override=override)
     if executor == "claude":
         override = getattr(args, "claude_model", None)
     elif executor == "codex":
-        override = args.model if args.model != DEFAULT_CODEX_MODEL else None
+        if getattr(args, "model_explicit", False):
+            override = args.model
+        elif os.environ.get("PI_MODEL", "").lower().endswith("-sol"):
+            return {
+                "model": DEFAULT_CODEX_MODEL,
+                "source": "sol-controller-complement",
+                "catalog": None,
+            }
+        else:
+            override = None
     elif executor == "kimi":
         override = args.kimi_model if args.kimi_model != DEFAULT_KIMI_MODEL else None
     else:
@@ -580,6 +638,27 @@ def run(args: argparse.Namespace) -> int:
         raise ValueError(
             f"attempt must be between 1 and max-attempts ({max_attempts})"
         )
+    package = validate_task_package(handoff)
+    if package.errors:
+        diagnostics = "\n".join(
+            f"- {line}" for line in task_package_error_lines(package)
+        )
+        raise ValueError(
+            "atomic task preflight failed; repair the HANDOFF contract before "
+            f"executor selection:\n{diagnostics}"
+        )
+    allow_legacy = getattr(args, "allow_legacy_task_package", False)
+    if package.legacy and not allow_legacy:
+        raise ValueError(
+            "atomic task preflight rejected an unversioned legacy task package; "
+            "pass --allow-legacy-task-package to use the bounded compatibility path"
+        )
+    if package.legacy:
+        print(
+            "run_task: legacy task package allowed explicitly; resuming without "
+            "Atomic Work Contract validation",
+            file=sys.stderr,
+        )
     validate_sustained_gate(args, handoff)
     handoff_text = handoff.read_text(encoding="utf-8")
     capability = normalize_capability(derive_capability(args, handoff))
@@ -629,10 +708,13 @@ def run(args: argparse.Namespace) -> int:
         "reasoning_effort": reasoning_effort,
     }
     print(json.dumps(route_record, sort_keys=True), file=sys.stderr)
+    executor_env = os.environ.copy()
+    executor_env["AGENT_BRIEF_SUPPRESS"] = "1"
     completed = subprocess.run(
         command_for(args, executor, capability, model_resolution),
         cwd=repo,
         check=False,
+        env=executor_env,
     )
     return completed.returncode
 

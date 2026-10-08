@@ -37,6 +37,11 @@ EXECUTOR_MODELS: dict[str, dict[str, list[str]]] = {
         "balanced": [],
         "hard": [],
     },
+    "agy": {
+        "fast": ["gemini-3.7-flash-low", "gemini-3.6-flash-low", "gemini-3.5-flash-low"],
+        "balanced": ["gemini-3.7-flash-high", "gemini-3.6-flash-high", "gemini-3.5-flash-high"],
+        "hard": ["gemini-3.7-flash-high", "gemini-3.1-pro-high"],
+    },
 }
 
 _GROK_MODEL = re.compile(r"(?<![A-Za-z0-9._/-])(grok-[A-Za-z0-9][A-Za-z0-9._/-]*)")
@@ -155,4 +160,6 @@ def resolve_effort(
         return "xhigh"
     if executor == "claude":
         return "high"
+    if executor == "agy":
+        return "high" if capability in ("balanced", "hard") else "low"
     return "inherited"

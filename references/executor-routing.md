@@ -48,7 +48,7 @@ python3 scripts/discover_executors.py --probe --out wp-state/roster.json
 当前默认映射：
 
 - Claude Code：`fast → haiku`，`balanced → sonnet`，`hard → opus`；
-- Codex Goal：hard / 规划 → `gpt-5.6-sol`，fast / 日常执行 → `gpt-5.6-luna`，默认 reasoning effort `xhigh`，由原生 `model/list` 和 reasoning effort 校验；
+- Codex Goal：通常 `hard / 规划 → gpt-5.6-sol`，`fast / 日常执行 → gpt-5.6-luna`，默认 reasoning effort `xhigh`；但当前控制端 `PI_MODEL` 是 Sol 且未显式传入 `--model` 时，writer 在所有级别默认使用 `gpt-5.6-luna` + `xhigh`，避免 Sol 同时承担主控与有界执行；显式模型优先。所有模型仍由原生 `model/list` 和 reasoning effort 校验；
 - Kimi：`kimi-code/k3`；
 - Grok：从 `grok models` 优先选择 `grok-4.6`、`grok-4.5` 或目录中更旧的兼容模型；
 - Pi：模型继承 Pi 自己的配置，wp 不读取或改写 Pi 的全局状态。

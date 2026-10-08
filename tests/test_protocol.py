@@ -14,7 +14,12 @@ INIT = ROOT / "scripts" / "init_task.py"
 RUNNER = ROOT / "scripts" / "run_claude_executor.py"
 VERIFY = ROOT / "scripts" / "verify_result.py"
 sys.path.insert(0, str(ROOT / "scripts"))
-from protocol import handoff_display_path, task_relative_paths  # noqa: E402
+from protocol import (  # noqa: E402
+    handoff_display_path,
+    parse_task_package_text,
+    task_relative_paths,
+    validate_atomic_work_contract,
+)
 
 
 class ProtocolTests(unittest.TestCase):
@@ -41,6 +46,206 @@ class ProtocolTests(unittest.TestCase):
         handoff = self.paths["handoff"].read_text(encoding="utf-8")
         self.assertIn("orchestrator: current-agent", handoff)
         self.assertIn("This is advisory context", handoff)
+        self.assertIn("task_protocol_version: 2", handoff)
+        self.assertIn("# Atomic Work Contract", handoff)
+
+    def test_valid_atomic_work_contract(self) -> None:
+        text = """---
+task_protocol_version: 2
+---
+
+# Atomic Work Contract
+
+```json
+{
+  "single_outcome": "Produce one verified parser change.",
+  "deliverables": ["scripts/protocol.py"],
+  "write_scope": ["scripts/protocol.py"],
+  "read_only": false,
+  "acceptance": ["The focused unit test passes."],
+  "resume_boundary": "Resume at the failing focused unit test."
+}
+```
+
+# Next section
+
+# Acceptance Criteria
+
+- [ ] The focused check passes.
+
+# Validation Commands
+
+```bash
+true
+```
+"""
+        parsed = parse_task_package_text(text)
+        self.assertTrue(parsed.valid)
+        self.assertFalse(parsed.legacy)
+        self.assertEqual(parsed.protocol_version, 2)
+
+    def test_unversioned_package_is_explicit_legacy(self) -> None:
+        parsed = parse_task_package_text("---\nstatus: planned\n---\n# Goal\nLegacy")
+        self.assertTrue(parsed.valid)
+        self.assertTrue(parsed.legacy)
+
+    def test_contract_rejects_each_invalid_field_class(self) -> None:
+        contract = {
+            "single_outcome": "TODO",
+            "deliverables": [],
+            "write_scope": ["../outside"],
+            "read_only": "false",
+            "acceptance": ["TBD"],
+            "resume_boundary": "",
+        }
+        errors = validate_atomic_work_contract(contract)
+        self.assertTrue(any("single_outcome" in error for error in errors))
+        self.assertTrue(any("deliverables" in error for error in errors))
+        self.assertTrue(any("write_scope" in error for error in errors))
+        self.assertTrue(any("read_only" in error for error in errors))
+        self.assertTrue(any("acceptance" in error for error in errors))
+        self.assertTrue(any("resume_boundary" in error for error in errors))
+
+    def test_placeholder_words_inside_legitimate_prose_are_allowed(self) -> None:
+        contract = {
+            "single_outcome": "Remove TODO markers from generated docs.",
+            "deliverables": ["A report covering unknown and none cases."],
+            "write_scope": ["docs/generated.md"],
+            "read_only": False,
+            "acceptance": ["Generated docs contain no TODO markers."],
+            "resume_boundary": "Resume after documenting unknown inputs; none are silently ignored.",
+        }
+        self.assertEqual(validate_atomic_work_contract(contract), [])
+        text = f"""---
+task_protocol_version: 2
+---
+
+# Atomic Work Contract
+
+```json
+{json.dumps(contract, indent=2)}
+```
+
+# Acceptance Criteria
+
+- [ ] Remove TODO markers from generated docs.
+
+# Validation Commands
+
+```bash
+python3 -c 'print("unknown and none are documented")'
+```
+
+# Blockers
+
+- None.
+"""
+        parsed = parse_task_package_text(text)
+        self.assertTrue(parsed.valid, parsed.errors)
+
+    def test_template_field_placeholder_is_rejected(self) -> None:
+        text = """---
+task_protocol_version: 2
+---
+
+# Goal
+
+Produce one verified parser change.
+
+# Atomic Work Contract
+
+```json
+{
+  "single_outcome": "Produce one verified parser change.",
+  "deliverables": ["scripts/protocol.py"],
+  "write_scope": ["scripts/protocol.py"],
+  "read_only": false,
+  "acceptance": ["The focused unit test passes."],
+  "resume_boundary": "Resume at the failing focused unit test."
+}
+```
+
+# Current Repository State
+
+- Repository type: TODO
+
+# Acceptance Criteria
+
+- [ ] The focused check passes.
+
+# Validation Commands
+
+```bash
+true
+```
+"""
+        parsed = parse_task_package_text(text)
+        self.assertFalse(parsed.valid)
+        self.assertTrue(any("placeholder outside" in error for error in parsed.errors))
+
+    def test_contract_rejects_malformed_json_and_read_only_write_scope(self) -> None:
+        malformed = parse_task_package_text(
+            "---\ntask_protocol_version: 2\n---\n"
+            "# Atomic Work Contract\n\n```json\n{bad}\n```\n"
+        )
+        self.assertFalse(malformed.valid)
+        self.assertIn("malformed", malformed.errors[0])
+        errors = validate_atomic_work_contract(
+            {
+                "single_outcome": "Inspect a repository.",
+                "deliverables": ["An inspection report"],
+                "write_scope": ["docs/**"],
+                "read_only": True,
+                "acceptance": ["The report is independently checked."],
+                "resume_boundary": "Resume from the last inspection command.",
+            }
+        )
+        self.assertTrue(any("empty write_scope" in error for error in errors))
+        self.assertEqual(
+            validate_atomic_work_contract(
+                {
+                    "single_outcome": "Inspect without changing files.",
+                    "deliverables": ["Inspection findings"],
+                    "write_scope": [],
+                    "read_only": True,
+                    "acceptance": ["The findings are independently checked."],
+                    "resume_boundary": "Resume at the next inspection command.",
+                }
+            ),
+            [],
+        )
+
+    def test_v2_requires_completed_acceptance_and_validation_sections(self) -> None:
+        text = """---
+task_protocol_version: 2
+---
+
+# Atomic Work Contract
+
+```json
+{
+  "single_outcome": "Produce one verified parser change.",
+  "deliverables": ["scripts/protocol.py"],
+  "write_scope": ["scripts/protocol.py"],
+  "read_only": false,
+  "acceptance": ["An independent check passes."],
+  "resume_boundary": "Resume at the failing focused test."
+}
+```
+
+# Acceptance Criteria
+
+- [ ] TODO
+
+# Validation Commands
+
+```bash
+TODO
+```
+"""
+        parsed = parse_task_package_text(text)
+        self.assertFalse(parsed.valid)
+        self.assertTrue(any("placeholder outside" in error for error in parsed.errors))
 
     def fake_claude(self, body: str) -> Path:
         executable = self.repo / "fake-claude"

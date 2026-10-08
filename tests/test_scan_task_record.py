@@ -50,7 +50,7 @@ class ScanTaskRecordTest(unittest.TestCase):
         self.assertEqual(main([str(self.record)]), 1)
 
     def test_home_path_warns(self) -> None:
-        self.write("roster.json", '{"path": "/home/demo/.grok/bin/grok"}\n')
+        self.write("roster.json", '{"path": "/home/alice/.grok/bin/grok"}\n')
         hard, warnings = scan_path(self.record)
         self.assertEqual(hard, [])
         self.assertTrue(any("home path" in item for item in warnings))

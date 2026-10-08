@@ -1,188 +1,131 @@
-# wp：仓库实现委派
+# skill-wp
 
-`wp` 是一个面向 Agent 的目标驱动委派技能。当前调用技能的 Agent 是主控 Agent；它理解仓库、组织任务、选择客户端、控制范围、验收结果并负责交付。另一个 Agent 只在指定 execution root 中完成有界实现。
+WP is a standalone **Agent Skill + Pi Plugin** repository for durable, visible delegation.
 
-Codex Goal 是 wp 的特色能力：它使用 Codex 原生 Goal/thread，可以在长任务或受限窗口后继续同一个 Goal。Claude Code、Grok、Kimi 和 Pi 都是普通 Agent client；它们没有被包装成“主控”，也不拥有最终验收权。
+- `SKILL.md` explains task boundaries, safety, recovery, and acceptance.
+- `extensions/wp.ts` registers `/wp` and strict lifecycle, watch, acknowledgement, and cancellation tools.
+- `src/core/` is the shared TypeScript state and control plane.
+- `bin/wpctl.mjs` is the headless/automation entry.
+- `scripts/*.py` remains available during the bounded compatibility window.
 
-## 先看这里：自定义和本地状态
-
-用户自己的配置和想法只放在技能目录：
-
-```text
-wp-custom/
-├── agents.md          # 用户自定义路由、客户端偏好和本地约束
-└── ideas/              # 想法和待验证方案
-```
-
-`wp-custom/` 被 Git 忽略，不会进入公共发布。仓库里提供的 `wp-custom/README.md` 是说明，不是用户配置本身。
-
-wp 的任务状态也只写技能目录的 `wp-state/`：
+## Runtime model
 
 ```text
-wp-state/
-└── repos/<repo-id>/
-    ├── tasks/<task-id>/       # HANDOFF、prompt、result、revision
-    └── runs/<task-id>/        # invocation、Goal/thread、客户端日志
+create contract → write HANDOFF/SOP → spawn or reconnect visible Herdr Pi tab
+→ wait for result.json while archiving attempt evidence
+→ deterministic Git + result review → bounded PASS / RETRY / BLOCKED
+→ controller acceptance
 ```
 
-`repo-id` 是目标仓库路径的本地稳定标识，不把目标仓库绝对路径写进任务记录。目标 execution root 仍然会被执行 Agent 修改，因为那是用户要求交付的代码位置；除此之外，wp 不在目标仓库创建 `.agent/` 或其他持久状态。
+Herdr lifecycle (`idle`, `done`, process exit) never means semantic success. `run` starts a detached durable supervisor and returns immediately so controllers can poll status while it reconnects, archives attempts, and performs bounded retries. Deterministic Git/result gates remain authoritative; after they pass, Jev supplies a typed completion judgment with configurable probability/confidence thresholds. Missing credentials, low confidence, malformed output, or API failure preserve resources for recovery. Acceptance closes only tabs that carry explicit WP-created ownership; adopted, ambiguous, blocked, and failed resources are retained.
 
-## 路由规则
+## State
 
-能力级别：
+The authoritative default is:
 
-| 级别 | 含义 | 默认使用场景 |
-|---|---|---|
-| `fast` | 时间优先 | 小范围、边界清楚、需要快速返回 |
-| `balanced` | 性能和价格平衡 | 默认，常规仓库实现 |
-| `hard` | 高难度 | 跨模块、迁移、长任务、复杂调试 |
+```text
+~/.agents/state/wp/
+  repos/<repo-id>/tasks/<task-id>/
+    HANDOFF.md
+    task.json
+    result.json
+    events.jsonl
+    resources.json
+    attempts/attempt-NN/{prompt.txt,resources.json,output.json,result.json,review.json}
+    reviews/
+    checkpoints/
+  locks/
+```
 
-旧参数 `frontier` 仍映射为 `hard`，只是兼容别名。
+Set `WP_STATE_DIR` to override it. Target repositories receive no `.agent/` or WP process files. Checkout-local `wp-state/` is legacy migration input only.
 
-客户端路由：
-
-| 条件 | 优先顺序 |
-|---|---|
-| 默认 `balanced` | Claude Code → Pi → Grok → Kimi → Codex |
-| `fast` | Claude Code → Pi → Grok → Kimi → Codex |
-| `hard` | Codex Goal → Claude Code → Pi → Grok → Kimi |
-| 需要信息搜索或资料检索 | Grok → Claude Code → Pi → Kimi → Codex |
-| 显式 `--agent` | 直接使用指定客户端 |
-
-Grok 的检索优先级只在明确使用 `--information-retrieval`/`--research` 时生效，不会把普通编码任务盲目改成检索任务。
-
-## 标准流程
-
-### 1. 初始化任务
+Preview and apply migration without deleting the source:
 
 ```bash
-python3 scripts/init_task.py \
-  --repo <execution-root> \
-  --task-id <yyyymmdd-slug> \
-  --goal "<one-paragraph observable outcome>" \
-  --agent auto \
-  --level balanced
+wpctl migrate --legacy-root /path/to/skill-wp/wp-state
+wpctl migrate --legacy-root /path/to/skill-wp/wp-state --apply
 ```
 
-执行后会：
+## Durable-supervisor validation
 
-1. 确认 `--repo` 是 Git 根目录；
-2. 为目标仓库计算本地 `repo-id`；
-3. 在 `wp-state/repos/<repo-id>/tasks/<task-id>/` 创建 HANDOFF、执行 prompt、Codex Goal 目标、Claude 权限配置和 result schema；
-4. 在 `wp-state/repos/<repo-id>/runs/<task-id>/` 创建运行目录；
-5. 写入目标、主控 Agent、初始客户端和级别元数据。
-
-它不会启动 Agent，不会修改目标仓库，也不会替用户填写 HANDOFF 占位内容。初始化完成后，主控 Agent 需要补齐相关文件、约束、验收标准和命令。
-
-初始化参数：
-
-| 参数 | 作用 |
-|---|---|
-| `--repo` | 要被修改的 Git 根目录，默认当前目录 |
-| `--task-id` | `yyyymmdd-lowercase-slug` 格式的任务 ID |
-| `--goal` | 一段可观察目标，不写实现步骤 |
-| `--agent` | `auto`、`claude`、`codex`、`grok`、`kimi` 或 `pi`；`--executor` 是兼容别名 |
-| `--level` | `fast`、`balanced` 或 `hard`；`--capability`/`--tier` 是兼容别名 |
-| `--codex-model` | Codex Goal 初始模型覆盖 |
-| `--codex-reasoning-effort` | Codex Goal 初始推理强度覆盖 |
-| `--kimi-model` | Kimi 初始模型覆盖 |
-| `--controller-model` | 主控 Agent 的记录模型名，默认读取 `PI_MODEL`；`--planner-model` 是兼容别名 |
-| `--controller-effort` | 主控 Agent 的记录推理强度，默认读取 `PI_REASONING_LEVEL`；`--planner-effort` 是兼容别名 |
-
-### 2. 探测客户端
+The supervisor is validated only through its real Pi + WP + Herdr + Git sandbox:
 
 ```bash
-python3 scripts/discover_executors.py --probe --out <roster-file>
+npm install
+npm run e2e:supervisor
 ```
 
-它检查当前机器上已安装的 Claude Code、Codex、Grok、Kimi、Pi，记录版本、可用性、transport 能力和可发现模型。`roster-file` 是一次运行的快照，放在技能目录的 `wp-state/` 中，不是长期配置。
+The E2E compiles as part of the scenario; do not substitute compilation-only, unit, static-analysis, or smoke commands for supervisor acceptance.
 
-### 3. 启动任务
+## Expose to Pi
+
+Build once, then expose exactly one source entry. Prefer an ASM-managed single-file link into Pi's extension discovery directory. On Windows hosts where file symlinks require unavailable elevation, install the same checkout file as a local single-extension source:
 
 ```bash
-python3 scripts/run_task.py \
-  --repo <execution-root> \
-  --task-id <yyyymmdd-slug> \
-  --agent auto \
-  --level balanced \
-  --roster <roster-file>
+pi install C:/path/to/skill-wp/extensions/wp.ts
 ```
 
-通用参数：
+This local-path entry executes the checkout directly; it does not copy source or create an aggregate package. Do not register WP through PER as well. After reconciliation, run `/reload` in Pi. The Plugin provides:
 
-| 参数 | 作用 |
-|---|---|
-| `--repo` | execution root |
-| `--task-id` | 已初始化任务 ID |
-| `--agent` | 选择客户端；`--executor` 为兼容别名 |
-| `--level` | `fast`、`balanced`、`hard`；旧 `frontier` 映射为 `hard` |
-| `--attempt` | 当前尝试编号，从 1 开始 |
-| `--max-attempts` | 最大尝试次数，默认 3 |
-| `--timeout-seconds` | 当前尝试的时间上限；不同客户端都使用它作为统一外层限制 |
-| `--continue` | 继续当前客户端支持的上一次任务；`--resume` 为兼容别名 |
-| `--revision` | 指向当前 revision note，供修复尝试读取 |
-| `--roster` | 实时客户端探测快照；健康状态为 degraded 的客户端不会启动 |
-| `--information-retrieval` | 把 Grok 放在自动路由第一位 |
-| `--research` | 上一参数的简写别名 |
-| `--time-sensitive` | 未显式指定级别时选择 `fast` |
-| `--long-task` + `--no-time-pressure` | 未显式指定级别且 HANDOFF 完整时选择 `hard` |
-| `--token-budget` | Codex Goal 的明确 token 总预算，不会自动增加 |
+- `/wp`
+- `wp_task_create`
+- `wp_task_status`
+- `wp_task_run`
+- `wp_task_resume`
+- `wp_task_review`
+- `wp_task_adopt`
+- `wp_task_accept`
+- `wp_task_watch` (bind a CLI-created task to this session)
+- `wp_task_ack` (acknowledge notification IDs, not acceptance)
+- `wp_task_cancel` (preview/confirmed safe retirement, not acceptance)
 
-客户端公共覆盖参数：
-
-| 参数 | 作用 |
-|---|---|
-| `--model` | Codex 的模型名；显式值优先于自动解析 |
-| `--effort` | Claude 的 `high`/`max` |
-| `--max-turns` | Claude 的最大回合数 |
-| `--claude-bin`/`--codex-bin`/`--grok-bin`/`--kimi-bin`/`--pi-bin` | 覆盖对应客户端可执行命令 |
-
-客户端特殊参数只在确实需要时使用：
-
-- Codex Goal：`--reasoning-effort`、`--idle-timeout-seconds`、`--request-timeout-seconds`、`--token-budget`；
-- Claude Code：`--claude-model`、`--permission-mode`、`--isolated`、`--max-budget-usd`；
-- Grok：`--grok-model`、`--grok-effort`、`--grok-max-turns`；
-- Kimi：`--kimi-model`；
-- Pi：`--pi-model`。
-
-### 4. 验证终态
+## wpctl
 
 ```bash
-python3 scripts/verify_result.py \
-  --repo <execution-root> \
-  --task-id <yyyymmdd-slug> \
-  --require-success
+npm run build
+node bin/wpctl.mjs init --repo <root> --task-id <yyyymmdd-slug> \
+  --goal "observable outcome" --write-scope src/a.ts,tests/a.test.ts \
+  --acceptance "tests pass|diff is scoped"
+node bin/wpctl.mjs status --repo <root> --task-id <id>
+node bin/wpctl.mjs run --repo <root> --task-id <id> --controller-tab-id <workspace:tab>
+node bin/wpctl.mjs check --repo <root> --task-id <id>
+node bin/wpctl.mjs accept --repo <root> --task-id <id>
+node bin/wpctl.mjs cancel --repo <root> --task-id <id>           # preview
+node bin/wpctl.mjs cancel --repo <root> --task-id <id> --confirm # authorized retirement
 ```
 
-脚本的原理是机械核对：
+`run` requires `HERDR_ENV=1`. It starts a detached supervisor, creates one background tab/pane or reconnects to persisted resources, archives attempt evidence, reviews actual Git changes, and performs bounded retry. Poll with `status`; a returned `started` receipt is not task completion. `accept` requires both the current deterministic PASS and a confident Jev `complete` judgment, then closes only tabs proven to have been created by that WP task. Cleanup failure is reported and preserves the resource; WP never auto-closes adopted tabs or workspaces.
 
-1. 根据 `repo` 和 `task-id` 定位技能目录中的同一任务状态；
-2. 读取 `result.json`，检查 task ID、终态、摘要、changed files、validation 和 blocker 字段；
-3. 检查 `handoff_path` 确实指向 `wp-state/`；
-4. 读取 HANDOFF，检查它的 status 与 result 一致；
-5. 确认 runner 已移除 `runner_sentinel`；
-6. `--require-success` 额外要求 status 为 `success`。
+## Native controller updates and retirement
 
-它证明的是“终态文件符合协议”，不是“代码一定正确”。主控仍必须检查完整 Git diff，并重新运行 HANDOFF 中的每一条验收命令。
+Plugin run/resume binds the task to the current Pi session. A session-scoped WP watcher
+reads durable event sequences and queues native `wp-update` follow-up messages; it does
+not require external `until`. Bind headless-created tasks with `wp_task_watch`.
+Delivered IDs are recovered from the active session branch across reload, and
+`wp_task_ack` persists consumption explicitly. A crash before a queued message is
+persisted can replay that same ID: consumers must treat IDs idempotently, not assume
+exactly-once transport. Shutdown stops the watcher; reopening the bound session
+recovers pending events. A running headless CLI alone cannot wake an unloaded Plugin.
 
-## 退出和重试
+Updates distinguish resource start, result availability, deterministic review,
+semantic judgment, acceptance, timeout, errors and cleanup. Result files and
+Herdr idle/done never authorize acceptance. The run receipt reports whether the
+supervisor environment contains `TYPESAFE_API_KEY`; provide it through the approved
+global environment before launching the controller. No key is copied into state.
+A missing key remains a real acceptance blocker, not a bypass opportunity.
 
-- `success`：实现、验证和主控验收全部完成；
-- `blocked`：存在明确外部阻塞，HANDOFF 和 result 必须给出证据、解除动作和恢复位置；
-- `failed`：实现仍错误、传输不可恢复、协议损坏或尝试次数耗尽。
+Explicit cancellation is independent of acceptance and requires confirmation.
+It refuses a live supervisor, adopted/unknown resources, active agents, missing
+result/output evidence, and any undelivered repository delta or claimed changes.
+It checks live single-pane topology and agent identity, closes only the owned tab,
+then reads back topology. Successful retirement records `failed` plus a
+`cancelled` event; it never claims semantic acceptance. This deliberately
+conservative route does not discard writer changes or forcibly stop working agents.
 
-默认最多 3 次尝试。每次都有自己的 timeout；相同根因连续两次出现就不再机械重试。Codex Goal 的 Goal `complete` 也只是候选完成，仍需主控验收。Codex 的 usage/budget/timebox 限制可以产生可恢复 `blocked`，继续时必须由主控显式给出新的窗口或预算。
+## Direct Herdr gate
 
-## 边界
+The Plugin blocks common direct scheduling chains (`herdr tab create`, `herdr agent start`, `herdr agent prompt`) issued through Pi's bash tool. Read-only inspection, focus/read/snapshot, Herdr diagnostics, and explicit time-limited `/wp` rescue mode remain available.
 
-安装、技能仓库 checkout、发现链接和跨设备同步属于 `agent-skill-sync`，不属于 wp。项目的 Gitea 提交和推送规则、公开 tracked set 与发布策略属于项目级 `AGENTS.md`，不在 README 中重复维护。
+## Compatibility
 
-wp 不会自动 cleanup、reset、重新初始化或删除 `wp-state/`、`wp-custom/`。公开内容以 Git tracked set 为准，项目规则负责说明交付策略。
-
-## 许可
-
-自有代码使用 [MIT License](LICENSE)；改编自 agent-sop 的文件保留其原始版权及 MIT 声明，详见 [NOTICE.md](NOTICE.md)。
-
-## 公开历史说明
-
-经作者授权，公开历史已重建为不含旧本机路径的干净首次提交。原公开版本的当前实现予以保留，仅补齐许可证、忽略规则和脱敏测试示例；没有将其他版本的 WP 实现覆盖进来。旧 checkout 需要重新克隆，勿将旧历史合并推回公开仓库。重建远端可达历史不能保证 GitHub 缓存、旧提交链接或他人克隆已经删除。
+The Python task/graph/supervisor commands remain callable with their existing checkout-local `wp-state/` contract during the migration window. New Plugin and `wpctl` tasks use `WP_STATE_DIR` or `~/.agents/state/wp`. Migrate legacy state explicitly, and move new integrations to the Plugin or `wpctl`; two independent scheduling kernels will not be maintained indefinitely.

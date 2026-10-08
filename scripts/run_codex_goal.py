@@ -23,6 +23,12 @@ from codex_app_server import (
     CodexAppServer,
     inherited_environment,
 )
+from budget_checkpoints import (
+    BudgetCheckpointController,
+    new_checkpoint_state,
+    protocol_evidence,
+    validate_checkpoint_state,
+)
 from protocol import (
     assert_isolated_execution_root,
     handoff_display_path,
@@ -438,7 +444,11 @@ def stale_goal_event(goal: dict[str, Any], minimum_updated_at: float | None) -> 
 
 
 def terminal_artifact_errors(
-    result_path: Path, handoff: Path, task_id: str, goal_status: str
+    result_path: Path,
+    handoff: Path,
+    task_id: str,
+    goal_status: str,
+    expected_handoff_path: str,
 ) -> tuple[Any, list[str]]:
     try:
         result = read_json(result_path)
@@ -447,7 +457,7 @@ def terminal_artifact_errors(
     if isinstance(result, dict) and result.get("producer") == "runner-provisional":
         return result, ["Codex did not replace the provisional result"]
     errors = validate_terminal_artifacts(
-        result, handoff, task_id, handoff_display_path(repo, task_id)
+        result, handoff, task_id, expected_handoff_path
     )
     expected_status = "success" if goal_status == "complete" else "blocked"
     if isinstance(result, dict) and result.get("status") != expected_status:
@@ -537,6 +547,16 @@ def run(args: argparse.Namespace) -> int:
     ):
         raise ValueError("resuming a budget-limited Goal requires --token-budget")
 
+    prior_authorized_budget = prior_thread.get("authorized_token_budget") if prior_thread else None
+    if prior_authorized_budget is not None and (
+        not isinstance(prior_authorized_budget, int) or isinstance(prior_authorized_budget, bool)
+        or prior_authorized_budget <= 0
+    ):
+        raise ValueError("persisted authorized token budget is invalid")
+    authorized_token_budget = (
+        args.token_budget if args.token_budget is not None else prior_authorized_budget
+    )
+
     try:
         version_process = subprocess.run(
             [args.codex_bin, "--version"],
@@ -562,6 +582,7 @@ def run(args: argparse.Namespace) -> int:
     thread_path = attempt_dir / "thread.json"
     persisted_goal_path = attempt_dir / "goal.json"
     token_usage_path = attempt_dir / "token-usage.json"
+    checkpoint_state_path = paths["budget_checkpoints"]
     invalid_result_path = attempt_dir / "executor-result.invalid.json"
     invocation_id = str(uuid.uuid4())
     if prior_thread:
@@ -595,13 +616,15 @@ def run(args: argparse.Namespace) -> int:
         "event_log": relative_to_repo(event_log, repo),
         "stderr_log": stderr_relative,
     }
-    if args.token_budget is not None:
-        invocation["authorized_token_budget"] = args.token_budget
+    if authorized_token_budget is not None:
+        invocation["authorized_token_budget"] = authorized_token_budget
     atomic_write_json(invocation_path, invocation)
     atomic_write_json(token_usage_path, {"observed": False})
     atomic_write_json(persisted_goal_path, {"goal_id": goal_id, "status": "not_set"})
 
     invocation["codex_version"] = version_process.stdout.strip()
+    invocation["protocol_evidence"] = protocol_evidence()
+    invocation["budget_checkpoint_state"] = relative_to_repo(checkpoint_state_path, repo)
     invocation["phase"] = "starting"
     atomic_write_json(invocation_path, invocation)
     atomic_write_json(
@@ -631,6 +654,7 @@ def run(args: argparse.Namespace) -> int:
         str(prior_thread["thread_id"]) if prior_thread is not None else None
     )
     thread_context: dict[str, Any] = {}
+    checkpoint_controller: BudgetCheckpointController | None = None
     final_goal: dict[str, Any] | None = None
     final_result: Any = None
     failure_summary: str | None = None
@@ -699,7 +723,50 @@ def run(args: argparse.Namespace) -> int:
         }
         if goal_status is not None:
             value["goal_status"] = goal_status
+        if authorized_token_budget is not None:
+            value["authorized_token_budget"] = authorized_token_budget
+        if checkpoint_controller is not None:
+            value["budget_checkpoint_generation"] = checkpoint_controller.generation["generation_id"]
+        value["budget_checkpoint_state"] = relative_to_repo(checkpoint_state_path, repo)
         atomic_write_json(thread_path, value)
+
+    def load_checkpoint_state() -> dict[str, Any]:
+        if not checkpoint_state_path.is_file():
+            return new_checkpoint_state(args.task_id)
+        try:
+            value = read_json(checkpoint_state_path)
+        except (OSError, json.JSONDecodeError) as exc:
+            invocation["checkpoint_state_error"] = str(exc)
+            atomic_write_json(invocation_path, invocation)
+            raise ValueError(f"budget checkpoint state is unreadable: {exc}") from exc
+        state_error = validate_checkpoint_state(value, args.task_id)
+        if state_error is not None:
+            invocation["checkpoint_state_error"] = state_error
+            atomic_write_json(invocation_path, invocation)
+            raise ValueError(state_error)
+        return value
+
+    def persist_checkpoint_state(state: dict[str, Any]) -> None:
+        state["updated_at"] = now_iso()
+        atomic_write_json(checkpoint_state_path, state)
+
+    def ensure_checkpoint_controller() -> None:
+        nonlocal checkpoint_controller
+        if checkpoint_controller is not None or authorized_token_budget is None or thread_id is None:
+            return
+        state = load_checkpoint_state()
+        checkpoint_controller = BudgetCheckpointController(
+            state,
+            args.task_id,
+            thread_id,
+            goal_id,
+            authorized_token_budget,
+            lambda: persist_checkpoint_state(state),
+            now_iso,
+        )
+        invocation["checkpoint_generation_id"] = checkpoint_controller.generation["generation_id"]
+        invocation["checkpoint_thresholds"] = checkpoint_controller.generation.get("thresholds", {})
+        atomic_write_json(invocation_path, invocation)
 
     def set_goal(active: CodexAppServer, status: str = "active") -> dict[str, Any]:
         params: dict[str, Any] = {
@@ -707,8 +774,8 @@ def run(args: argparse.Namespace) -> int:
             "objective": objective,
             "status": status,
         }
-        if args.token_budget is not None:
-            params["tokenBudget"] = args.token_budget
+        if authorized_token_budget is not None:
+            params["tokenBudget"] = authorized_token_budget
         response = request(active, "thread/goal/set", params)
         goal = response.get("goal")
         if not isinstance(goal, dict):
@@ -755,6 +822,28 @@ def run(args: argparse.Namespace) -> int:
             if "activeTurn" not in error_text and "active turn" not in error_text.lower():
                 raise
 
+    def steer_checkpoint(instruction: str, expected_turn_id: str) -> tuple[bool, str | None]:
+        if thread_id is None:
+            return False, "cannot steer without an active thread id"
+        active = client
+        if active is None:
+            return False, "cannot steer without an active App Server"
+        try:
+            response = request(
+                active,
+                "turn/steer",
+                {
+                    "threadId": thread_id,
+                    "expectedTurnId": expected_turn_id,
+                    "input": [{"type": "text", "text": instruction}],
+                },
+            )
+            if not isinstance(response.get("turnId"), str) or not response["turnId"]:
+                return False, "turn/steer returned an invalid turnId"
+            return True, None
+        except AppServerError as exc:
+            return False, str(exc)
+
     def monitor(
         active: CodexAppServer, minimum_goal_updated_at: float | None
     ) -> dict[str, Any]:
@@ -789,16 +878,43 @@ def run(args: argparse.Namespace) -> int:
                 params = {}
             if method == "thread/goal/updated":
                 goal = params.get("goal")
+                if isinstance(goal, dict) and stale_goal_event(
+                    goal, minimum_goal_updated_at
+                ):
+                    stale_goal_events_ignored += 1
+                    invocation["stale_goal_events_ignored"] = stale_goal_events_ignored
+                    atomic_write_json(invocation_path, invocation)
+                    continue
                 if isinstance(goal, dict):
-                    if stale_goal_event(goal, minimum_goal_updated_at):
-                        stale_goal_events_ignored += 1
-                        invocation["stale_goal_events_ignored"] = stale_goal_events_ignored
-                        atomic_write_json(invocation_path, invocation)
-                        continue
-                    atomic_write_json(persisted_goal_path, goal_snapshot(goal_id, goal))
-                    if goal.get("status") in TERMINAL_GOAL_STATUSES:
-                        return goal
+                    atomic_write_json(
+                        persisted_goal_path, goal_snapshot(goal_id, goal)
+                    )
+                if checkpoint_controller is not None:
+                    checkpoint_result = checkpoint_controller.process(
+                        params,
+                        steer_checkpoint,
+                    )
+                    invocation["last_checkpoint_event"] = checkpoint_result
+                    invocation["checkpoint_generation_id"] = (
+                        checkpoint_controller.generation["generation_id"]
+                    )
+                    invocation["checkpoint_thresholds"] = (
+                        checkpoint_controller.generation.get("thresholds", {})
+                    )
+                    atomic_write_json(invocation_path, invocation)
+                else:
+                    invocation["checkpoint_skipped"] = (
+                        "no explicit or persisted positive token budget"
+                    )
+                    atomic_write_json(invocation_path, invocation)
+                if (
+                    isinstance(goal, dict)
+                    and goal.get("status") in TERMINAL_GOAL_STATUSES
+                ):
+                    return goal
             elif method == "thread/tokenUsage/updated":
+                # Raw model token totals are diagnostic only. Native Goal
+                # tokensUsed/tokenBudget is the checkpoint accounting source.
                 atomic_write_json(token_usage_path, {"observed": True, **params})
             elif method == "turn/completed":
                 invocation["last_turn"] = params.get("turn")
@@ -881,6 +997,21 @@ def run(args: argparse.Namespace) -> int:
                         and final_goal.get("status") in TERMINAL_GOAL_STATUSES
                     ):
                         final_goal = set_goal(client)
+                    elif (
+                        final_goal is not None
+                        and prior_authorized_budget is not None
+                        and args.token_budget is not None
+                        and args.token_budget > prior_authorized_budget
+                    ):
+                        # A larger explicit budget is a new native authorization
+                        # and therefore must be reflected before monitoring usage.
+                        final_goal = set_goal(client)
+
+                ensure_checkpoint_controller()
+                persist_thread(
+                    resumable=True,
+                    goal_status=final_goal.get("status") if final_goal is not None else None,
+                )
 
                 if final_goal is None or final_goal.get("status") == "active":
                     turn_text = (
@@ -898,7 +1029,11 @@ def run(args: argparse.Namespace) -> int:
 
                 while final_goal.get("status") == "complete":
                     final_result, errors = terminal_artifact_errors(
-                        result_path, handoff, args.task_id, "complete"
+                        result_path,
+                        handoff,
+                        args.task_id,
+                        "complete",
+                        handoff_display_path(repo, args.task_id),
                     )
                     if not errors:
                         break
@@ -1001,7 +1136,11 @@ def run(args: argparse.Namespace) -> int:
         )
         if goal_status == "complete":
             final_result, errors = terminal_artifact_errors(
-                result_path, handoff, args.task_id, goal_status
+                result_path,
+                handoff,
+                args.task_id,
+                goal_status,
+                handoff_display_path(repo, args.task_id),
             )
             if errors:
                 archive_invalid(result_path, invalid_result_path)
@@ -1018,7 +1157,11 @@ def run(args: argparse.Namespace) -> int:
                 mark_handoff_failed(handoff, invocation_id, summary, stderr_relative)
         elif goal_status == "blocked":
             final_result, errors = terminal_artifact_errors(
-                result_path, handoff, args.task_id, goal_status
+                result_path,
+                handoff,
+                args.task_id,
+                goal_status,
+                handoff_display_path(repo, args.task_id),
             )
             if errors:
                 archive_invalid(result_path, invalid_result_path)

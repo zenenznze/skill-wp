@@ -126,6 +126,23 @@ CANDIDATES = {
         "probe_args": ["-p", "reply with exactly: ok"],
         "background_recipe": "kimi -p (non-interactive prompt mode; tool calls auto-approved)",
     },
+    "agy": {
+        "vendor": "google",
+        "default_capability": "balanced",
+        "models": EXECUTOR_MODELS["agy"],
+        "transport": {
+            "resumable": False,
+            "headless": True,
+            "tools": True,
+            "native_goal": False,
+            "model_discovery": False,
+            "single_shot": True,
+            "bounded_agent": True,
+        },
+        "version_args": ["--version"],
+        "probe_args": ["-p", "reply with exactly: ok", "--dangerously-skip-permissions"],
+        "background_recipe": "agy -p <prompt> --dangerously-skip-permissions",
+    },
 }
 
 VERSION_TIMEOUT = 10

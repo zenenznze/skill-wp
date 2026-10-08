@@ -13,6 +13,7 @@
 | 缺少凭据、外部服务或用户无法从仓库推断的关键决定 | 记录准确位置、尝试、证据、解除动作和恢复点 | `blocked` |
 | Codex `usageLimited` | 保留同一 thread，等待额度恢复后由主控显式继续 | `blocked` |
 | Codex `budgetLimited` | 主控审查进度并显式授权新的总预算 | `blocked` |
+| Codex 75%/90% soft checkpoint | runner 持久化并通过活动回合 steering 提醒，Goal 继续运行 | 非终态 |
 | Codex sustained timebox 到期 | 主控审查进度并显式授权下一个窗口 | `blocked` |
 | Codex App Server 第一次退出 | 同一 thread 重启并恢复一次 | 非终态 |
 | Codex App Server 第二次退出 | 不再重启 | `failed` |
@@ -20,6 +21,14 @@
 | Goal complete 但终态文件无效 | 发送一次仅修复 HANDOFF/result 的 turn | 第二次无效为 `failed` |
 
 普通客户端的 `--continue` 会创建新的编号 attempt 并把当前 HANDOFF/result 摘要交给新的 prompt；它不会假装恢复原生会话。
+
+## Governance monitor
+
+Workflow Governance v1 的 monitor 以 60–120 秒区间观察运行态并记录根因。相同根因
+连续两次时必须停止自动重试、标记自动继续为 blocked 并升级；不能用缩短轮询或盲目
+重发绕过。Herdr wait timeout 也是 inconclusive：先 `agent get` 和 `agent read` 读取
+现场，再决定修正、改路由或请求 human gate。确定性判断由
+`scripts/workflow_governance.py::monitor_policy` 提供。
 
 ## 默认成本边界
 

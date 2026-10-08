@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -85,10 +86,75 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("run_codex_goal.py", codex_command[1])
         self.assertIn("--model", codex_command)
 
+    def test_sol_controller_defaults_codex_writer_to_luna_xhigh(self) -> None:
+        with patch.dict(os.environ, {"PI_MODEL": "gpt-5.6-sol"}):
+            default_args = self.args("--agent", "codex", "--level", "hard")
+            resolved = RUN_TASK_MODULE.executor_model_resolution(
+                default_args, "codex", "hard"
+            )
+            self.assertEqual(resolved["model"], "gpt-5.6-luna")
+            self.assertEqual(resolved["source"], "sol-controller-complement")
+            self.assertEqual(default_args.reasoning_effort, "xhigh")
+
+            explicit_args = self.args(
+                "--agent", "codex", "--level", "hard", "--model", "gpt-5.6-sol"
+            )
+            explicit = RUN_TASK_MODULE.executor_model_resolution(
+                explicit_args, "codex", "hard"
+            )
+            self.assertEqual(explicit["model"], "gpt-5.6-sol")
+            self.assertEqual(explicit["source"], "override")
+
     def test_attempt_limit_is_explicit(self) -> None:
         args = self.args("--attempt", "4", "--max-attempts", "3")
         with self.assertRaisesRegex(ValueError, "max-attempts"):
             RUN_TASK_MODULE.run(args)
+
+    def test_v2_contract_refuses_before_executor_subprocess(self) -> None:
+        args = self.args("--agent", "claude")
+        with patch.object(RUN_TASK_MODULE.subprocess, "run") as launch:
+            with self.assertRaisesRegex(ValueError, "atomic task preflight"):
+                RUN_TASK_MODULE.run(args)
+        launch.assert_not_called()
+
+    def test_legacy_package_requires_explicit_compatibility_flag(self) -> None:
+        text = self.handoff.read_text(encoding="utf-8")
+        text = text.replace("task_protocol_version: 2\n", "", 1)
+        start = text.index("# Atomic Work Contract")
+        end = text.index("# Current Repository State", start)
+        text = text[:start] + text[end:]
+        self.handoff.write_text(text, encoding="utf-8")
+        args = self.args("--agent", "claude")
+        with patch.object(RUN_TASK_MODULE.subprocess, "run") as launch:
+            with self.assertRaisesRegex(ValueError, "allow-legacy-task-package"):
+                RUN_TASK_MODULE.run(args)
+        launch.assert_not_called()
+
+    def test_explicit_legacy_compatibility_flag_allows_routing(self) -> None:
+        text = self.handoff.read_text(encoding="utf-8")
+        text = text.replace("task_protocol_version: 2\n", "", 1)
+        start = text.index("# Atomic Work Contract")
+        end = text.index("# Current Repository State", start)
+        text = text[:start] + text[end:]
+        self.handoff.write_text(text, encoding="utf-8")
+        args = self.args("--agent", "claude", "--allow-legacy-task-package")
+        with patch.dict(
+            os.environ,
+            {
+                "AGENT_BRIEF_SUPPRESS": "controller-value",
+                "WP_ROUTING_TEST_VALUE": "preserved",
+            },
+        ):
+            with patch.object(RUN_TASK_MODULE.subprocess, "run") as launch:
+                launch.return_value.returncode = 0
+                self.assertEqual(RUN_TASK_MODULE.run(args), 0)
+            self.assertEqual(
+                os.environ["AGENT_BRIEF_SUPPRESS"], "controller-value"
+            )
+        launch.assert_called_once()
+        executor_env = launch.call_args.kwargs["env"]
+        self.assertEqual(executor_env["AGENT_BRIEF_SUPPRESS"], "1")
+        self.assertEqual(executor_env["WP_ROUTING_TEST_VALUE"], "preserved")
 
 
 if __name__ == "__main__":
