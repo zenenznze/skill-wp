@@ -15,7 +15,7 @@ parser.add_argument("--tree", help="Inspect every tracked blob in this committed
 parser.add_argument("--prefix", default="", help="Restrict to an explicit public export directory")
 args = parser.parse_args()
 patterns = {
-    "private-home": re.compile(r"/home/(?!demo/|test/|alice/|<user>|\[)[A-Za-z0-9_.-]+|[A-Z]:\\Users\\(?!<user>|account|demo)[A-Za-z0-9_.-]+"),
+    "private-home": re.compile(r"(?<![A-Za-z0-9])/home/(?!demo/|test/|alice/|<user>|\[)[A-Za-z0-9_.-]+|[A-Z]:\\Users\\(?!<user>|account|demo)[A-Za-z0-9_.-]+"),
     "machine-root": re.compile("/" + r"lzcapp/"),
     "private-host": re.compile(r"heiyu" + r"\.space|host" + r"\.lzcapp|192\.168\.[0-9]+\.[0-9]+"),
     "token": re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}|sk-[A-Za-z0-9_-]{24,}"),
