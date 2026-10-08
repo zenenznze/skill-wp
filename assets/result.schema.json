@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Delegated code execution task result",
+  "type": "object",
+  "required": [
+    "task_id",
+    "status",
+    "summary",
+    "handoff_path",
+    "changed_files",
+    "validation",
+    "blocker",
+    "recommended_next_action"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}-[a-z0-9][a-z0-9-]*$"
+    },
+    "status": {
+      "enum": ["success", "blocked", "failed"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "handoff_path": {
+      "type": "string",
+      "pattern": "^wp-state/repos/[^/]+/tasks/[^/]+/HANDOFF\\.md$"
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "validation": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "exit_code", "result"],
+        "properties": {
+          "command": {"type": "string", "minLength": 1},
+          "exit_code": {"type": ["integer", "null"]},
+          "result": {"enum": ["passed", "failed", "not_run"]}
+        },
+        "additionalProperties": true
+      }
+    },
+    "blocker": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["where", "attempted", "evidence", "unblock_action", "resume_from"],
+          "properties": {
+            "where": {"type": "string", "minLength": 1},
+            "attempted": {"type": "string", "minLength": 1},
+            "evidence": {"type": "string", "minLength": 1},
+            "unblock_action": {"type": "string", "minLength": 1},
+            "resume_from": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    },
+    "recommended_next_action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "observation"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "observation": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": true
+      }
+    },
+    "failure_class": {
+      "enum": ["protocol_error", "task_failure"]
+    },
+    "producer": {"type": "string"},
+    "transport": {"type": "object"}
+  },
+  "additionalProperties": true
+}

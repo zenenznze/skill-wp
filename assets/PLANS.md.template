@@ -1,0 +1,8 @@
+# wp task state
+
+Task records live under the skill checkout's `wp-state/` directory. Each task
+has one HANDOFF and may have numbered attempts. The current calling Agent is the
+controller; selected clients only implement bounded work in the target root.
+
+Keep state local and sanitized. Do not copy credentials, raw provider logs,
+whole source files, or user custom configuration into task records.

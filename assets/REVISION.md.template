@@ -1,0 +1,26 @@
+# Revision {{REVISION_NUMBER}}
+
+This file records verifier findings only. The complete task remains in
+`HANDOFF.md`.
+
+## Failed Acceptance Checks
+
+- TODO: criterion and observed mismatch
+
+## Evidence
+
+- TODO: command, exit code, diff location, or runtime observation
+
+## Required Corrections
+
+1. TODO
+
+## Constraints That Still Apply
+
+- All constraints and non-goals in `HANDOFF.md` remain unchanged.
+
+## Required Revalidation
+
+```bash
+TODO
+```

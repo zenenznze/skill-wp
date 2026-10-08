@@ -1,0 +1,4 @@
+# Compatibility template for projects that keep a private task archive.
+# New wp tasks are stored in the skill checkout's ignored wp-state/ instead.
+runs/
+*.log

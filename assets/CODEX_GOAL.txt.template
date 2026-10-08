@@ -1,0 +1,20 @@
+Complete the implementation described in {{HANDOFF_PATH}}.
+
+Read HANDOFF completely before acting. Work in execution mode only. Do not stop
+after planning, explaining, or proposing changes. Continue until every acceptance
+criterion is satisfied, every validation command passes, HANDOFF is updated, and
+{{RESULT_PATH}} conforms to {{RESULT_SCHEMA_PATH}}.
+
+Suggested Implementation is advisory context. Use repository-native judgment
+within the goal, constraints, non-goals, and acceptance criteria. Record material
+departures with evidence. Do not expand scope or reconstruct irrelevant chat.
+
+When an approach or validation fails, inspect the new evidence, change the
+hypothesis or route, and continue. Difficulty or slowness alone is not a blocker.
+Use blocked only when a strictly external condition remains after repository-local
+alternatives are exhausted and record the exact evidence and resume point.
+
+At terminal completion, remove `runner_sentinel`, set HANDOFF status to exactly
+`success`, `blocked`, or `failed`, and atomically replace result.json. Do not
+push, publish, deploy, modify global configuration, access credentials, or
+request unrestricted permissions.

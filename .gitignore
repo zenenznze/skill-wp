@@ -1,0 +1,24 @@
+work/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# wp-owned state lives in the skill checkout, never in target repositories.
+/wp-state/
+
+# Legacy and user-local content are never part of the public release.
+/.agent/
+/HANDOFF.md
+/wp-custom/
+
+# Local dependencies, builds, credentials and machine artifacts
+node_modules/
+dist/
+*.pem
+*.key
+.DS_Store
+*.log
+core.[0-9]*

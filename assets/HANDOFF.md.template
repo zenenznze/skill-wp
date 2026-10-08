@@ -1,0 +1,120 @@
+---
+task_id: {{TASK_ID}}
+status: planned
+orchestrator: {{ORCHESTRATOR}}
+controller_model: {{PLANNER_MODEL}}
+controller_effort: {{PLANNER_EFFORT}}
+executor: {{EXECUTOR}}
+executor_model: {{EXECUTOR_MODEL}}
+executor_effort: {{EXECUTOR_EFFORT}}
+executor_capability: {{EXECUTOR_CAPABILITY}}
+created_at: {{CREATED_AT}}
+updated_at: {{CREATED_AT}}
+---
+
+# Goal
+
+{{GOAL}}
+
+The goal is an observable outcome. Acceptance criteria are authoritative if the
+current implementation direction changes.
+
+# Current Repository State
+
+- Repository type: TODO
+- Primary stack: TODO
+- Relevant entry points: TODO
+- Current implementation: TODO
+- Material decisions and rationale: TODO
+- Material unknowns: TODO, or `None`
+- Known issues: TODO
+
+# Relevant Files
+
+- `TODO`: authoritative evidence and why it can change the approach or acceptance
+- `TODO`: focused test or validation evidence
+- `TODO`: related policy or configuration boundary
+
+Use links to authoritative files and bounded log regions. Do not paste whole
+sources, conversations, or raw logs.
+
+# Visual Evidence
+
+Leave this section empty for text-only tasks. For visual tasks, list every image
+path and the exact observation target.
+
+- `TODO`: observation target
+
+# Constraints
+
+- Must not modify: TODO
+- Compatibility to preserve: TODO
+- Dependencies that must not be added: TODO
+- Security requirements: TODO
+- Performance requirements: TODO
+
+# Non-Goals
+
+- TODO
+
+# Acceptance Criteria
+
+- [ ] TODO observable condition
+- [ ] TODO observable condition
+- [ ] Every validation command below passes
+- [ ] No unrelated file is modified
+- [ ] No known issue remains undeclared
+
+# Suggested Implementation
+
+1. TODO
+2. TODO
+3. TODO
+
+This is advisory context. The executor may choose a better repository-native
+route within the goal, constraints, non-goals, and acceptance criteria, and must
+record material departures with evidence.
+
+# Context Packet Readiness
+
+- [ ] Goal and observable acceptance checks are unambiguous.
+- [ ] Relevant state, evidence, decisions, rationale, and unknowns are sufficient.
+- [ ] Constraints, non-goals, ownership, permissions, and compatibility are explicit.
+- [ ] Included facts can change approach, scope, safety, validation, or acceptance.
+- [ ] Suggested Implementation preserves executor judgment.
+
+# Validation Commands
+
+```bash
+# Replace with repository-supported commands. Do not leave placeholders.
+TODO
+```
+
+# Execution Progress
+
+- Not started.
+
+# Decision Record
+
+- None.
+
+# Changed Files
+
+- None.
+
+# Validation Results
+
+- Not run.
+
+# Blockers
+
+- None.
+
+# Resume Instructions
+
+Start with the current HANDOFF, inspect the latest evidence, and continue the
+next bounded attempt. Do not reconstruct the task from chat.
+
+# Final Result
+
+Not complete.

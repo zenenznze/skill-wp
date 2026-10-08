@@ -1,0 +1,19 @@
+{
+  "should_trigger": [
+    "delegate this non-trivial repository implementation to another Agent",
+    "委派这个仓库的代码修改并保留可恢复交接",
+    "run a bounded coding task with independent verification",
+    "让另一个 Agent 完成跨文件重构并检查最终 diff",
+    "route a long Codex Goal task and resume it after a timebox"
+  ],
+  "near_neighbor": [
+    "delegate a bounded research pass that needs source retrieval",
+    "用 Grok 检索资料后整理成仓库内文档"
+  ],
+  "should_not_trigger": [
+    "install and expose this skill across my Agent runtimes",
+    "sync skill checkouts across devices",
+    "run tests and fix a small one-line bug directly",
+    "write a standalone Python crawler"
+  ]
+}

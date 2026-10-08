@@ -1,0 +1,53 @@
+# 决策记录：{{title}}
+
+这是一次材料设计、范围、安全或交付决策的脱敏记录。文件放在技能目录的
+`wp-state/` 中，不写入目标仓库的 `.agent/`，也不进入公开发布。
+
+- 状态：`pending` / `approved` / `changes_requested` / `rejected`
+- 创建时间：{{date}}
+- 关联任务：{{task_reference}}
+- 主控 Agent：{{author}}
+- 执行客户端：{{roster_reference}}
+
+## 结论
+
+{{decision_summary}}
+
+## 背景和证据
+
+{{context}}
+
+- {{evidence_1}}
+
+## 选项和取舍
+
+### 方案 A
+
+{{option_a}}
+
+### 方案 B
+
+{{option_b}}
+
+### 采用方案
+
+{{recommendation}}
+
+## 影响、风险和回滚
+
+{{impact}}
+
+{{risks_and_rollback}}
+
+## Review 和验证
+
+- Review：{{review_verdict}}
+- 独立性：{{review_independence_level}}
+- 验证：{{verification_status}}
+- 未解决风险：{{remaining_risks}}
+
+## 决策记录
+
+- 状态变更：{{human_authorized_status}}
+- 时间：{{signoff_time}}
+- 说明：{{signoff_notes}}

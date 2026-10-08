@@ -1,0 +1,4 @@
+interface:
+  display_name: "委派（wp）"
+  short_description: "Route implementation with durable handoff state"
+  default_prompt: "Use $wp as the current Agent controller to route bounded repository implementation and independently verify the result."
