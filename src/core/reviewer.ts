@@ -41,7 +41,7 @@ export function deterministicReview(repo: string, dir: string, task: TaskRecord)
     const badClaims = claimed.filter(path => !inScope(path, task.contract.write_scope));
     if (badClaims.length) findings.push(`result claims out-of-scope files: ${badClaims.join(", ")}`);
     if (result.status === "failed") findings.push(`executor failed: ${result.summary}`);
-    if (result.status === "success" && result.validation.some(v => (v.outcome || v.result) !== "passed")) findings.push("successful result contains non-passing validation evidence");
+    if (result.status === "success" && result.validation.some(v => v.role !== "diagnostic" && (v.outcome || v.result) !== "passed")) findings.push("successful result contains non-passing validation evidence");
   }
   let verdict: Review["verdict"] = findings.length ? "RETRY" : "PASS";
   if (result?.status === "blocked") verdict = "BLOCKED";

@@ -46,7 +46,7 @@ export interface TaskResult {
   status: "success" | "blocked" | "failed";
   summary: string;
   changed_files: string[];
-  validation: Array<{ command: string; outcome?: "passed" | "failed" | "skipped"; result?: "passed" | "failed" | "not_run"; evidence?: string }>;
+  validation: Array<{ command: string; outcome?: "passed" | "failed" | "skipped"; result?: "passed" | "failed" | "not_run"; evidence?: string; role?: "required" | "diagnostic"; reason?: string }>;
   blocker?: string | Record<string, unknown> | null;
   handoff_path: string;
 }
@@ -96,6 +96,15 @@ export function assertResult(value: unknown, task: TaskRecord): asserts value is
   if (typeof r.summary !== "string" || !r.summary.trim()) throw new Error("result summary is required");
   if (!Array.isArray(r.changed_files) || !Array.isArray(r.validation)) throw new Error("invalid result evidence");
   if (r.status === "success" && !(r.validation as unknown[]).length) throw new Error("successful result requires validation evidence");
+  for (const entry of r.validation as TaskResult["validation"]) {
+    if (!entry || typeof entry.command !== "string" || !entry.command.trim()) throw new Error("validation command is required");
+    if (!["passed","failed","skipped","not_run"].includes(String(entry.outcome || entry.result))) throw new Error("invalid validation outcome");
+    if (entry.role !== undefined && !["required","diagnostic"].includes(entry.role)) throw new Error("invalid validation role");
+    if (entry.role === "diagnostic" && (!entry.reason?.trim() || !entry.evidence?.trim())) throw new Error("diagnostic validation requires reason and evidence");
+    if (entry.role === "diagnostic" && task.contract.acceptance.includes(entry.command)) throw new Error("contract acceptance cannot be downgraded to diagnostic");
+  }
+  if (r.status === "success" && !(r.validation as TaskResult["validation"]).some(v => v.role !== "diagnostic"))
+    throw new Error("successful result requires required validation evidence");
   if (r.status === "blocked" && (r.blocker === null || r.blocker === undefined || (typeof r.blocker === "string" && !r.blocker.trim()))) throw new Error("blocked result requires blocker");
   if (typeof r.handoff_path !== "string" || !r.handoff_path.endsWith("HANDOFF.md")) throw new Error("invalid handoff_path");
 }

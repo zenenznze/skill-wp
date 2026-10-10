@@ -92,6 +92,12 @@ malformed version 也不会自动迁移。详细层级、拆分标准和 graph �
 
 runner 在启动前写入 provisional `failed` result，并在 HANDOFF 写入 `runner_sentinel`。执行者必须在终态时删除 sentinel、更新 HANDOFF status，并替换 result。runner 退出码为 0 只表示终态文件已经持久化，不表示任务成功。
 
+## 验证分类与结果写入
+
+validation.role省略时按required处理；required失败或未执行始终拒绝success。辅助诊断可显式diagnostic，但必须保留reason和evidence，不能将合同验收命令降级；至少一项required通过。分类是执行证据，不替代主控重跑完整合同验收，诊断失败仍进入语义审查证据。
+
+Worker在任务根result.json原子写终态（创建parent后临时文件rename）；supervisor归档到attempt。仅写attempt副本不代表收件完成。state.atomicWrite已负责创建缺失目录；恢复保留失败、身份及尝试次数，不手工把已耗尽failed重置为成功。
+
 ## 尝试边界
 
 统一入口默认 `max-attempts=3`。每次尝试都受 timeout 限制；相同根因连续两次出现后停止重复尝试，主控必须修改假设或路由。Codex Goal 还受显式 token budget 限制，预算不会自动增加。

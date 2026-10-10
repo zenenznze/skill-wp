@@ -1,0 +1,30 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {mkdtempSync,readFileSync,writeFileSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {execFileSync} from "node:child_process";
+import {createTask,reviewTask} from "../src/core/controller.js";
+import {taskDir,atomicWrite} from "../src/core/state.js";
+test("required/diagnostic/skipped evidence is classified without hiding failures",()=>{
+ const root=mkdtempSync(join(tmpdir(),"wp-roles-")),repo=mkdtempSync(join(tmpdir(),"wp-repo-")),id="20261010-roles";
+ execFileSync("git",["init","-q"],{cwd:repo});
+ createTask({repo,task_id:id,single_outcome:"read local report",deliverables:["report"],write_scope:[],read_only:true,acceptance:["required-check"],resume_boundary:"report",max_attempts:1},root);
+ const dir=taskDir(repo,id,root),base={task_id:id,status:"success",summary:"read",changed_files:[],handoff_path:join(dir,"HANDOFF.md")};
+ const check=(validation:unknown[],verdict:string)=>{atomicWrite(join(dir,"result.json"),{...base,validation});assert.equal(reviewTask(repo,id,root).details?.verdict,verdict);};
+ check([{command:"required-check",outcome:"passed"}],"PASS");
+ check([{command:"required-check",outcome:"failed"}],"RETRY");
+ check([{command:"required-check",outcome:"skipped"}],"RETRY");
+ const diagnostic={command:"extra-font",outcome:"failed",role:"diagnostic",reason:"not contract acceptance",evidence:"local failure retained"};
+ check([{command:"required-check",outcome:"passed"},diagnostic],"PASS");
+ assert.equal(JSON.parse(readFileSync(join(dir,"result.json"),"utf8")).validation[1].outcome,"failed");
+ check([diagnostic],"RETRY");
+ check([{...diagnostic,command:"required-check"}],"RETRY");
+ check([{command:"required-check",outcome:"passed"},{...diagnostic,reason:""}],"RETRY");
+ check([{command:"required-check",outcome:"unknown"}],"RETRY");
+});
+test("atomic result creates attempt parents and persists identity",()=>{
+ const root=mkdtempSync(join(tmpdir(),"wp-result-")),p=join(root,"attempts","attempt-01","result.json");
+ atomicWrite(p,{task_id:"20261010-result",attempt:1,status:"blocked"});
+ assert.equal(JSON.parse(readFileSync(p,"utf8")).attempt,1);
+});

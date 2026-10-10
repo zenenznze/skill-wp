@@ -11,7 +11,7 @@ export interface SupervisorOptions { controllerTabId?: string; waitTimeoutMs?: n
 function attemptDir(dir:string,n:number){return join(dir,"attempts",`attempt-${pad(n)}`);}
 function promptFor(task:TaskRecord,dir:string,feedback?:Review):string{
  const retry=feedback?` Previous deterministic review returned RETRY: ${feedback.findings.join("; ")}. Correct those findings without exceeding scope.`:"";
- return redact(`WP task ${task.contract.task_id}. Read ${join(dir,"HANDOFF.md")} first. This is attempt ${task.attempt}.${retry} Work only within the declared contract. Write the terminal result to ${join(dir,"result.json")} and update HANDOFF.md. Do not push, deploy, or read credentials.`);
+ return redact(`WP task ${task.contract.task_id}. Read ${join(dir,"HANDOFF.md")} first. This is attempt ${task.attempt}.${retry} Work only within the declared contract. Write the terminal result to ${join(dir,"result.json")} atomically after creating its parent directory; the supervisor archives it to attempts/attempt-NN/result.json. Do not write only an attempt copy. Validation role defaults to required; diagnostic entries need reason and evidence and cannot substitute contract acceptance. Update HANDOFF.md. Do not push, deploy, or read credentials.`);
 }
 function archiveFile(source:string,target:string){if(existsSync(source))copyFileSync(source,target);}
 export async function supervise(repo:string,dir:string,options:SupervisorOptions={}):Promise<Receipt>{
