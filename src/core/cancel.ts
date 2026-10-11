@@ -4,6 +4,7 @@ import { HerdrClient } from "../herdr/client.js";
 import { appendEvent, atomicWrite, digest, readJson, taskDir, WriterLock } from "./state.js";
 import { deterministicReview } from "./reviewer.js";
 import { assertResult, type ResourceRecord, type TaskRecord } from "./types.js";
+import { persistControllerState } from "./summary.js";
 
 /** Cancellation is not acceptance. Only settled, collected, scope-verified resources can be reclaimed. */
 export async function cancelTask(repo:string,id:string,confirmed:boolean,root?:string) {
@@ -48,7 +49,7 @@ export async function cancelTask(repo:string,id:string,confirmed:boolean,root?:s
   const remaining=(after.result as {snapshot?:{tabs?:Array<Record<string,unknown>>}})?.snapshot?.tabs;
   if(!remaining||remaining.some(t=>t.tab_id===resource.tab_id))throw new Error("tab closure could not be verified");
   resource.lifecycle="closed";atomicWrite(join(dir,"resources.json"),resource);
-  task.status="failed";task.updated_at=new Date().toISOString();atomicWrite(join(dir,"task.json"),task);
+  task.status="failed";persistControllerState(dir,task,"Task cancelled without acceptance");
   appendEvent(join(dir,"events.jsonl"),{event:"cancelled",attempt:task.attempt,tab_id:resource.tab_id,acceptance:false});
   return {preview:false,task_id:id,closed:[resource.tab_id],acceptance:false};
  } finally {lock.release();}

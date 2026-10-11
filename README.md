@@ -28,16 +28,19 @@ The authoritative default is:
   repos/<repo-id>/tasks/<task-id>/
     HANDOFF.md
     task.json
+    summary.json
     result.json
     events.jsonl
     resources.json
-    attempts/attempt-NN/{prompt.txt,resources.json,output.json,result.json,review.json}
+    attempts/attempt-NN/{prompt.txt,resources.json,output.json,HANDOFF.md,result.json,review.json}
     reviews/
     checkpoints/
   locks/
 ```
 
 Set `WP_STATE_DIR` to override it. Target repositories receive no `.agent/` or WP process files. Checkout-local `wp-state/` is legacy migration input only.
+
+`task.json` is the WP controller authority. `summary.json` and the root HANDOFF controller block distinguish the attempt claim, review verdict/findings, and current WP status. `status` derives this view without modifying old records, even when an exhausted RETRY has removed the root executor result. Later independent business delivery keeps its own version, artifact hash, real approval and delivery evidence; it does not turn a historical WP `failed` into success. See [the protocol](references/protocol.md#控制器状态与独立续作).
 
 Preview and apply migration without deleting the source:
 
@@ -48,14 +51,14 @@ wpctl migrate --legacy-root /path/to/skill-wp/wp-state --apply
 
 ## Durable-supervisor validation
 
-The supervisor is validated only through its real Pi + WP + Herdr + Git sandbox:
+Full live scheduling acceptance uses the real Pi + WP + Herdr + Git sandbox when Agent creation and semantic transport are authorized:
 
 ```bash
 npm install
 npm run e2e:supervisor
 ```
 
-The E2E compiles as part of the scenario; do not substitute compilation-only, unit, static-analysis, or smoke commands for supervisor acceptance.
+The E2E compiles as part of the scenario. Focused controller summary/recovery regression tests use real `wpctl` consumers and an isolated Herdr adapter; passing these does not establish live scheduling or paid semantic acceptance.
 
 ## Expose to Pi
 

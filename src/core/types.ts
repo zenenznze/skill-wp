@@ -22,6 +22,8 @@ export interface TaskRecord {
   created_at: string;
   updated_at: string;
   contract_digest: string;
+  /** Controller decision reason; executor and business evidence stay separate. */
+  status_reason?: string;
 }
 export interface ResourceRecord {
   schema: "wp-resources-v1";

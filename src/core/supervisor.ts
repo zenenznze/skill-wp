@@ -1,19 +1,19 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { HerdrClient } from "../herdr/client.js";
 import { appendEvent, atomicWrite, readJson, redact, WriterLock } from "./state.js";
 import { deterministicReview, writeReview } from "./reviewer.js";
 import { judgeWithJev, type JevBoundaryResult } from "../semantic/jev-boundary.js";
 import type { Receipt, ResourceRecord, Review, TaskRecord } from "./types.js";
+import { archiveAttemptEvidence, controllerSummary, persistControllerState } from "./summary.js";
 
 const now=()=>new Date().toISOString(), pad=(n:number)=>String(n).padStart(2,"0");
 export interface SupervisorOptions { controllerTabId?: string; waitTimeoutMs?: number; pollMs?: number }
 function attemptDir(dir:string,n:number){return join(dir,"attempts",`attempt-${pad(n)}`);}
 function promptFor(task:TaskRecord,dir:string,feedback?:Review):string{
  const retry=feedback?` Previous deterministic review returned RETRY: ${feedback.findings.join("; ")}. Correct those findings without exceeding scope.`:"";
- return redact(`WP task ${task.contract.task_id}. Read ${join(dir,"HANDOFF.md")} first. This is attempt ${task.attempt}.${retry} Work only within the declared contract. Write the terminal result to ${join(dir,"result.json")} atomically after creating its parent directory; the supervisor archives it to attempts/attempt-NN/result.json. Do not write only an attempt copy. Validation role defaults to required; diagnostic entries need reason and evidence and cannot substitute contract acceptance. Update HANDOFF.md. Do not push, deploy, or read credentials.`);
+ return redact(`WP task ${task.contract.task_id}. Read ${join(dir,"HANDOFF.md")} first. This is attempt ${task.attempt}.${retry} Work only within the declared contract. Write the terminal result to ${join(dir,"result.json")} atomically after creating its parent directory; the supervisor archives it to attempts/attempt-NN/result.json. Do not write only an attempt copy. The WP Controller State block and root status belong to the controller; record only your bounded attempt claims outside that block. Validation role defaults to required; diagnostic entries need reason and evidence and cannot substitute contract acceptance. Update HANDOFF.md. Do not push, deploy, or read credentials.`);
 }
-function archiveFile(source:string,target:string){if(existsSync(source))copyFileSync(source,target);}
 export async function supervise(repo:string,dir:string,options:SupervisorOptions={}):Promise<Receipt>{
  const lock=new WriterLock(join(dir,"supervisor.lock")); lock.acquire();
  try{
@@ -44,11 +44,11 @@ export async function supervise(repo:string,dir:string,options:SupervisorOptions
    }
    try{const output=await herdr.read(resource.agent_id!);atomicWrite(join(ad,"output.json"),output);}catch(error){atomicWrite(join(ad,"output.json"),{unavailable:true,error:error instanceof Error?error.message:String(error)});}
    if(!existsSync(join(dir,"result.json"))) {
-    task.status="blocked";task.updated_at=now();atomicWrite(join(dir,"task.json"),task);
+    task.status="blocked";persistControllerState(dir,task,"Worker did not produce result.json before timeout");
     appendEvent(join(dir,"events.jsonl"),{event:"wait_timeout",attempt:task.attempt});
     return {schema:"wp-receipt-v1",operation:"run",task_id:task.contract.task_id,ok:false,timestamp:now(),details:{status:"blocked",reason:"worker did not produce result.json before timeout",resource}};
    }
-   archiveFile(join(dir,"result.json"),join(ad,"result.json"));
+   archiveAttemptEvidence(dir,task);
    appendEvent(join(dir,"events.jsonl"),{event:"result_available",attempt:task.attempt,tab_id:resource.tab_id});
    const checked=deterministicReview(repo,dir,task);writeReview(dir,checked.review);atomicWrite(join(ad,"review.json"),checked.review);
    appendEvent(join(dir,"events.jsonl"),{event:"reviewed",attempt:task.attempt,verdict:checked.review.verdict,findings:checked.review.findings});
@@ -67,24 +67,26 @@ export async function supervise(repo:string,dir:string,options:SupervisorOptions
     atomicWrite(join(ad,"semantic.json"),semantic);atomicWrite(join(dir,"semantic.json"),semantic);
     appendEvent(join(dir,"events.jsonl"),{event:"semantic_judged",attempt:task.attempt,judgment:semantic.judgment,probability:semantic.probability,confidence:semantic.confidence,reason:semantic.reason});
     if(semantic.judgment!=="complete"){
-     task.status="blocked";task.updated_at=now();atomicWrite(join(dir,"task.json"),task);
+     task.status="blocked";persistControllerState(dir,task,`Semantic review did not confidently establish completion: ${semantic.judgment}; ${semantic.reason}`);
      return {schema:"wp-receipt-v1",operation:"run",task_id:task.contract.task_id,ok:false,timestamp:now(),details:{status:"blocked",reason:"semantic review did not confidently establish completion",semantic,resource}};
     }
-    task.status="review";task.updated_at=now();atomicWrite(join(dir,"task.json"),task);
+    task.status="review";persistControllerState(dir,task,"Deterministic PASS and semantic completion; awaiting controller acceptance");
     return {schema:"wp-receipt-v1",operation:"run",task_id:task.contract.task_id,ok:true,timestamp:now(),details:{status:"review",verdict:"PASS",semantic,attempt:task.attempt,resource,actual_files:checked.actualFiles}};
    }
    if(checked.review.verdict==="BLOCKED"){
-    task.status="blocked";task.updated_at=now();atomicWrite(join(dir,"task.json"),task);
+    task.status="blocked";persistControllerState(dir,task,[checked.review.summary,...checked.review.findings].join("; "));
     return {schema:"wp-receipt-v1",operation:"run",task_id:task.contract.task_id,ok:false,timestamp:now(),details:{status:"blocked",review:checked.review,resource}};
    }
    previous=checked.review; rmSync(join(dir,"result.json"),{force:true});
-   if(task.attempt>=task.contract.max_attempts){task.status="failed";task.updated_at=now();atomicWrite(join(dir,"task.json"),task);return {schema:"wp-receipt-v1",operation:"run",task_id:task.contract.task_id,ok:false,timestamp:now(),details:{status:"failed",review:checked.review}};}
+   if(task.attempt>=task.contract.max_attempts){task.status="failed";persistControllerState(dir,task,["Attempt limit exhausted",checked.review.summary,...checked.review.findings].join("; "));return {schema:"wp-receipt-v1",operation:"run",task_id:task.contract.task_id,ok:false,timestamp:now(),details:{status:"failed",review:checked.review,summary:controllerSummary(dir,task)}};}
    resource.lifecycle="retired";atomicWrite(join(ad,"resources.json"),resource);
-   task.attempt++;task.status="running";task.updated_at=now();atomicWrite(join(dir,"task.json"),task);rmSync(join(dir,"resources.json"),{force:true});
+   task.attempt++;task.status="running";persistControllerState(dir,task,[`Retrying after attempt ${previous.attempt} RETRY`,...previous.findings].join("; "));rmSync(join(dir,"resources.json"),{force:true});
   }
   throw new Error("attempt limit exhausted");
  }catch(error){
-  const task=readJson<TaskRecord>(join(dir,"task.json"));task.status="blocked";task.updated_at=now();atomicWrite(join(dir,"task.json"),task);
+  const task=readJson<TaskRecord>(join(dir,"task.json"));
+  if(["accepted","failed"].includes(task.status))throw error;
+  task.status="blocked";persistControllerState(dir,task,redact(error instanceof Error?error.message:String(error)));
   appendEvent(join(dir,"events.jsonl"),{event:"supervisor_error",attempt:task.attempt,message:redact(error instanceof Error?error.message:String(error))});
   throw error;
  }finally{lock.release();}

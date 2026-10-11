@@ -4,14 +4,18 @@ import {mkdtempSync,readFileSync,writeFileSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {execFileSync} from "node:child_process";
-import {createTask,reviewTask} from "../src/core/controller.js";
-import {taskDir,atomicWrite} from "../src/core/state.js";
+import {createTask} from "../src/core/controller.js";
+import {deterministicReview} from "../src/core/reviewer.js";
+import type {TaskRecord} from "../src/core/types.js";
+import {taskDir,atomicWrite,readJson} from "../src/core/state.js";
 test("required/diagnostic/skipped evidence is classified without hiding failures",()=>{
  const root=mkdtempSync(join(tmpdir(),"wp-roles-")),repo=mkdtempSync(join(tmpdir(),"wp-repo-")),id="20261010-roles";
  execFileSync("git",["init","-q"],{cwd:repo});
  createTask({repo,task_id:id,single_outcome:"read local report",deliverables:["report"],write_scope:[],read_only:true,acceptance:["required-check"],resume_boundary:"report",max_attempts:1},root);
  const dir=taskDir(repo,id,root),base={task_id:id,status:"success",summary:"read",changed_files:[],handoff_path:join(dir,"HANDOFF.md")};
- const check=(validation:unknown[],verdict:string)=>{atomicWrite(join(dir,"result.json"),{...base,validation});assert.equal(reviewTask(repo,id,root).details?.verdict,verdict);};
+ // Exercise validation classification directly; terminal controller decisions cannot be reused for new candidates.
+ const task=readJson<TaskRecord>(join(dir,"task.json"));
+ const check=(validation:unknown[],verdict:string)=>{atomicWrite(join(dir,"result.json"),{...base,validation});assert.equal(deterministicReview(repo,dir,task).review.verdict,verdict);};
  check([{command:"required-check",outcome:"passed"}],"PASS");
  check([{command:"required-check",outcome:"failed"}],"RETRY");
  check([{command:"required-check",outcome:"skipped"}],"RETRY");

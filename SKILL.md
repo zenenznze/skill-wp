@@ -41,7 +41,7 @@ WP 同时提供两个入口，共享同一状态协议：
 
 ## 三层真源
 
-1. **SOP/HANDOFF 管事实**：`HANDOFF.md`、`task.json`、`result.json`、`events.jsonl`、`attempts/`、`reviews/`、`checkpoints/`、`resources.json` 是可恢复状态；聊天和最终回答只是证据。
+1. **SOP/HANDOFF 管事实**：`task.json` 是 WP 控制器状态真源；`summary.json` 和根 HANDOFF 的 `WP Controller State` 区块是派生摘要。`result.json` 是执行者收件，`attempts/`、`reviews/`、`events.jsonl`、`checkpoints/`、`resources.json` 保留恢复证据；聊天和最终回答只是证据。
 2. **WP Plugin 管逻辑**：创建合同、单 writer 锁、调度、结果 schema、独立 review、bounded retry、恢复和 acceptance gate。
 3. **Herdr 管前台**：一个 Agent 一个可见 tab/pane；`idle`/`done` 只是生命周期，不代表任务成功。
 
@@ -88,6 +88,7 @@ wpctl migrate --legacy-root <skill-checkout>/wp-state --apply
 - 合同 digest 不一致、多控制器写锁冲突、路径穿越或非法 schema 一律 fail closed。
 - 未知或并发 Git 修改不得 reset、stash、覆盖或夹带。
 - review、主控验收、human signoff、push 和 deployment 是独立门禁，不能互相推导。
+- `status` 同时报告 WP 权威状态、attempt 自报和 review 路径/原因；耗尽的 `failed` 保留历史，`check/resume` 不重写它。用户授权的外部独立续作按业务版本、产物 hash 和批准/交付证据表达，无需为此回到 supervisor；详见协议的「控制器状态与独立续作」。
 
 ## 详细参考
 

@@ -56,7 +56,7 @@ turn、不改变 Goal 状态、不增加预算；100% 仍由 Codex 原生 `budge
 
 ## HANDOFF
 
-HANDOFF 是唯一完整的人类可读任务状态源，但不是聊天记录，也不是源码副本。只保留会改变方案、范围、安全、验证或验收的事实：
+HANDOFF 提供完整的人类可读恢复上下文。TypeScript 控制器以 `task.json` 为 WP 状态真源，根 HANDOFF 的 `WP Controller State` 区块及 frontmatter 是其派生视图；区块外执行者进度/Final Result 是有界 attempt 证据。旧 HANDOFF 可与根状态矛盾，恢复时用 `status` 回读真实状态与归档证据，不凭旧 frontmatter 推导成功。HANDOFF 不是聊天记录或源码副本，只保留会改变方案、范围、安全、验证或验收的事实：
 
 - 可观察目标和验收命令；
 - 相关仓库现状、权威文件和已知未知项；
@@ -84,9 +84,9 @@ malformed version 也不会自动迁移。详细层级、拆分标准和 graph �
 
 ## 终态
 
-任务终态只允许：
+执行者 result 的终态只允许：
 
-- `success`：执行者写出完整终态，主控随后独立验证并接受；
+- `success`：执行者自报有界成果，主控随后独立验证并接受；
 - `blocked`：存在明确外部阻塞，记录位置、尝试、证据、解除动作和恢复点；
 - `failed`：实现错误、传输不可恢复、协议错误、验收失败或尝试耗尽。
 
@@ -96,7 +96,25 @@ runner 在启动前写入 provisional `failed` result，并在 HANDOFF 写入 `r
 
 validation.role省略时按required处理；required失败或未执行始终拒绝success。辅助诊断可显式diagnostic，但必须保留reason和evidence，不能将合同验收命令降级；至少一项required通过。分类是执行证据，不替代主控重跑完整合同验收，诊断失败仍进入语义审查证据。
 
-Worker在任务根result.json原子写终态（创建parent后临时文件rename）；supervisor归档到attempt。仅写attempt副本不代表收件完成。state.atomicWrite已负责创建缺失目录；恢复保留失败、身份及尝试次数，不手工把已耗尽failed重置为成功。
+Worker 在任务根 `result.json` 原子写终态（创建 parent 后临时文件 rename）；supervisor 归档到 attempt。仅写 attempt 副本不代表收件完成。validation 的 `outcome` 或兼容 `result` 必须是结构化枚举（如 `passed`）；命令说明放 `evidence`，`exit_code: 0` 和自由文本 `PASS ...` 不替代枚举。state.atomicWrite 已负责创建缺失目录；恢复保留失败、身份及尝试次数，不手工把已耗尽 failed 重置为成功。
+
+### 控制器状态与独立续作
+
+三种结论分别绑定自己的范围与证据：
+
+| 层级 | 权威证据 | 表达范围 |
+| --- | --- | --- |
+| attempt 自报 | `attempts/attempt-NN/result.json`、`HANDOFF.md` | 执行者的有界成果，如 r2 预审包 |
+| WP 控制器 | 根 `task.json`，当前/最后 review 与 semantic 证据 | `pending/running/review/blocked/failed/accepted`，不是人类批准 |
+| 业务最新交付 | 业务自己的 current/version、产物 hash、真实批准与交付 receipt | 如独立续作 r10；不改变历史 WP attempt |
+
+根 `summary.json` 使用 `wp-controller-summary-v1`，包含 `scope: wp_contract`、权威状态、当前 attempt、最后可用 attempt result/review 的身份、路径、原因及 findings。根 HANDOFF 的 `WP Controller State` 区块同源生成，原始执行者 HANDOFF 先归档。RETRY 后根 `result.json` 可被移除以等待下一收件，归档和摘要保留；不要创建一个冒充执行者的根 failed/success result。
+
+`wpctl status` / `wp_task_status` 每次从 `task.json` 和证据推导摘要，不信任旧 `summary.json`，也不写历史状态。下一 attempt 尚无结果时，返回的 review/result 仍带上一 attempt 编号；缺失或身份不匹配证据明确显示为空/警告。历史 HANDOFF status 与权威状态不同时报告警告。`check`、`resume` 对已耗尽 `failed` 或 `accepted` 返回 `ok:false` 与只读摘要，不重新审核、不启动资源、不改写历史。
+
+WP 的 `accepted` 只表示该 WP 合同被主控接受。所有摘要都显式声明 `human_approval: not_established_by_wp`、`business_delivery: tracked_externally`；业务实际已批准不应被解释成 pending，也不能反向补造 WP PASS。
+
+用户可以授权在原 tab 或其他既有工作流独立续作，无需回到 supervisor。续作在业务记录中明确引用：历史 WP task/attempt result/review 路径与失败判定；当前版本和产物 SHA256；真实人类批准的版本/hash/证据路径及适用范围；交付 receipt 路径。例如「WP attempt-01 的 r2 自报 success、review RETRY、controller failed；后续独立 r10 的批准与交付绑定 r10 hash」。当前业务 HANDOFF 可使用业务已有的版本恢复区块标记最新证据，其余段落保留历史；不把 r10 批准迁移到 r2，不要求新增编排器或改写历史运行记录。
 
 ## 尝试边界
 

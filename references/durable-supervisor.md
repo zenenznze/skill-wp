@@ -13,7 +13,7 @@ For each bounded attempt WP:
 3. otherwise creates one visible background tab, starts Pi, persists the resource IDs, and sends the bounded HANDOFF prompt;
 4. waits for `result.json` while archiving terminal output;
 5. compares the real Git working tree with `write_scope` and `result.changed_files`;
-6. archives prompt, resources, output, result, and review below `attempts/attempt-NN/`;
+6. archives prompt, resources, output, executor HANDOFF, result, and review below `attempts/attempt-NN/`;
 7. returns `PASS`, preserves an external `BLOCKED`, or starts a bounded retry with review findings.
 
 Herdr `idle`, `done`, process exit, and terminal prose are lifecycle evidence only. They never create semantic success. A timeout preserves the resource and task state so a later `resume` can reconnect rather than create a duplicate tab.
@@ -24,18 +24,21 @@ Herdr `idle`, `done`, process exit, and terminal prose are lifecycle evidence on
 ~/.agents/state/wp/repos/<repo-id>/tasks/<task-id>/
   HANDOFF.md
   task.json
+  summary.json
   resources.json
   result.json
   events.jsonl
   supervisor.lock
   supervisor-process.json
   supervisor.log
-  attempts/attempt-NN/{prompt.txt,resources.json,output.json,result.json,review.json}
+  attempts/attempt-NN/{prompt.txt,resources.json,output.json,HANDOFF.md,result.json,review.json}
   reviews/attempt-NN.json
   checkpoints/
 ```
 
 All JSON state writes use same-directory temporary files, fsync, and atomic rename. Events are appended and fsynced. A stale PID lock is recoverable; a live owner is rejected.
+
+`task.json` owns the controller status. Every controller transition updates its reason, derives `summary.json`, and synchronizes the root HANDOFF status and `WP Controller State` block. These separate files are not a multi-file transaction: read-only status always derives from authority and attempt evidence, and warns about a stale HANDOFF after interrupted writes. A RETRY may remove the root executor inbox but never its archived result/review. Exhausted `failed` decisions remain historical on check/resume; independent business continuation follows its own version/hash/approval records as described in [protocol.md](protocol.md#控制器状态与独立续作).
 
 ## Review and acceptance
 
@@ -47,14 +50,16 @@ The deterministic reviewer parses the result contract and obtains the actual rep
 - out-of-scope claims;
 - invalid, missing, failed, or internally non-passing results.
 
-`accept` requires the current attempt's persisted PASS review and task status `review`. Only then does WP rename the real tab to `完成-<task-id>` and persist `accepted`.
+`accept` requires the current attempt's persisted PASS review, task status `review`, a semantic `complete` judgment, and a fresh deterministic check. It persists controller `accepted` and performs the existing ownership-checked cleanup. This status establishes neither human approval nor later business delivery.
 
 ## Real end-to-end validation
 
-Run only the sandbox scenario when validating this supervisor:
+For full live scheduling acceptance, run the sandbox scenario only when creating Agents and using the configured semantic transport are authorized:
 
 ```bash
 npm run e2e:supervisor
 ```
 
 The scenario compiles as setup inside the E2E, initializes a temporary Git repository, launches a real headless Pi controller with the WP extension, creates a real Herdr worker, forces a deterministic first-attempt RETRY, reaches PASS on a later attempt, and inspects persisted archives and the live Herdr tab. It does not push or deploy.
+
+For controller summary/recovery changes, `tests-ts/controller-summary.test.ts` exercises real `wpctl` status/resume/check consumers against sanitized state and supervisor failure branches through an isolated Herdr adapter. This validates state expression and recovery boundaries; it does not claim live Agent scheduling or paid semantic acceptance.
